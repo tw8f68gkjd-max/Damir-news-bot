@@ -1391,7 +1391,7 @@ async def manutd(
 
     await update.message.reply_text(
         "Муха лох.\n"
-        "Слабый везде."
+        "Слабый везде😂"
     )
 
 
