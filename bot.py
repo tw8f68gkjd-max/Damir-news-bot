@@ -6,7 +6,8 @@ import uuid
 import threading
 import calendar
 import xml.etree.ElementTree as ET
-from collections import OrderedDict
+
+from collections import OrderedDict, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -16,6 +17,7 @@ from urllib.parse import urljoin
 
 import feedparser
 import requests
+
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
@@ -23,6 +25,7 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
 )
+
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -32,172 +35,494 @@ from telegram.ext import (
     filters,
 )
 
+
+# =========================================================
+# AI
+# =========================================================
+
 GROQ_MODEL = "openai/gpt-oss-20b"
 GEMINI_MODEL = "gemini-3.8-flash"
 
+
+# =========================================================
+# АКТУАЛЬНОСТЬ И КАЧЕСТВО
+# =========================================================
+
+# Берём до 8 свежих публикаций с каждой RSS.
+# Но в итог они попадают НЕ по порядку RSS.
+ARTICLES_PER_FEED = 8
+
+# Новости старше 24 часов не показываем.
+FRESH_HOURS = 24
+
+# Ограничение одного AI-запроса.
+MAX_AI_ARTICLES = 36
+
+# Сколько итоговых карточек показываем.
+MAX_NEWS_EVENTS = 15
+MAX_REGION_EVENTS = 10
+MAX_SPORT_EVENTS = 12
+
+
+# =========================================================
+# ИСТОЧНИКИ
+# =========================================================
+
+# publisher = независимая редакция.
+# Например:
+# BBC Sport + BBC Football = одна редакция BBC Sport.
+#
+# Поэтому бот не будет писать "2 источника",
+# если событие найдено в двух RSS одного СМИ.
+
 NEWS_FEEDS = [
-    {"region": "🇰🇿 Казахстан", "source": "Kazinform", "url": "https://qazinform.com/rss/en.xml"},
-    {"region": "🇰🇿 Казахстан", "source": "The Astana Times", "url": "https://astanatimes.com/feed/"},
-    {"region": "🇺🇸 США", "source": "NPR", "url": "https://feeds.npr.org/1003/rss.xml"},
-    {"region": "🇺🇸 США", "source": "BBC", "url": "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml"},
-    {"region": "🇪🇺 Европа", "source": "Euronews", "url": "https://www.euronews.com/rss?format=mrss&level=vertical&name=my-europe"},
-    {"region": "🇪🇺 Европа", "source": "BBC", "url": "https://feeds.bbci.co.uk/news/world/europe/rss.xml"},
-    {"region": "🇨🇳 Китай", "source": "China News Service", "url": "https://www.chinanews.com.cn/rss/china.xml"},
-    {"region": "🇨🇳 Китай", "source": "BBC", "url": "https://feeds.bbci.co.uk/news/world/asia/china/rss.xml"},
-    {"region": "🇷🇺 Россия", "source": "Интерфакс", "url": "https://www.interfax.ru/rss.asp"},
-    {"region": "🇷🇺 Россия", "source": "Meduza", "url": "https://meduza.io/rss2/all"},
-    {"region": "🌍 Мир", "source": "Euronews", "url": "https://www.euronews.com/rss?format=mrss&level=theme&name=news"},
-    {"region": "🌍 Мир", "source": "BBC", "url": "https://feeds.bbci.co.uk/news/world/rss.xml"},
-    {"region": "🤖 AI / технологии", "source": "TechCrunch", "url": "https://techcrunch.com/category/artificial-intelligence/feed/"},
-    {"region": "🤖 AI / технологии", "source": "The Verge", "url": "https://www.theverge.com/rss/index.xml"},
+
+    # -------------------------
+    # КАЗАХСТАН
+    # -------------------------
+
+    {
+        "region": "🇰🇿 Казахстан",
+        "source": "Kazinform",
+        "publisher": "Kazinform",
+        "url": "https://qazinform.com/rss/en.xml",
+    },
+
+    {
+        "region": "🇰🇿 Казахстан",
+        "source": "The Astana Times",
+        "publisher": "The Astana Times",
+        "url": "https://astanatimes.com/feed/",
+    },
+
+
+    # -------------------------
+    # США
+    # -------------------------
+
+    {
+        "region": "🇺🇸 США",
+        "source": "NPR",
+        "publisher": "NPR",
+        "url": "https://feeds.npr.org/1003/rss.xml",
+    },
+
+    {
+        "region": "🇺🇸 США",
+        "source": "BBC",
+        "publisher": "BBC",
+        "url": "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml",
+    },
+
+
+    # -------------------------
+    # ЕВРОПА
+    # -------------------------
+
+    {
+        "region": "🇪🇺 Европа",
+        "source": "Euronews",
+        "publisher": "Euronews",
+        "url": "https://www.euronews.com/rss?format=mrss&level=vertical&name=my-europe",
+    },
+
+    {
+        "region": "🇪🇺 Европа",
+        "source": "BBC",
+        "publisher": "BBC",
+        "url": "https://feeds.bbci.co.uk/news/world/europe/rss.xml",
+    },
+
+
+    # -------------------------
+    # КИТАЙ
+    # -------------------------
+
+    {
+        "region": "🇨🇳 Китай",
+        "source": "China News Service",
+        "publisher": "China News Service",
+        "url": "https://www.chinanews.com.cn/rss/china.xml",
+    },
+
+    {
+        "region": "🇨🇳 Китай",
+        "source": "BBC",
+        "publisher": "BBC",
+        "url": "https://feeds.bbci.co.uk/news/world/asia/china/rss.xml",
+    },
+
+
+    # -------------------------
+    # РОССИЯ
+    # -------------------------
+
+    {
+        "region": "🇷🇺 Россия",
+        "source": "Интерфакс",
+        "publisher": "Интерфакс",
+        "url": "https://www.interfax.ru/rss.asp",
+    },
+
+    {
+        "region": "🇷🇺 Россия",
+        "source": "Meduza",
+        "publisher": "Meduza",
+        "url": "https://meduza.io/rss2/all",
+    },
+
+
+    # -------------------------
+    # МИР
+    # -------------------------
+
+    {
+        "region": "🌍 Мир",
+        "source": "Euronews",
+        "publisher": "Euronews",
+        "url": "https://www.euronews.com/rss?format=mrss&level=theme&name=news",
+    },
+
+    {
+        "region": "🌍 Мир",
+        "source": "BBC",
+        "publisher": "BBC",
+        "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
+    },
+
+
+    # -------------------------
+    # AI / ТЕХНОЛОГИИ
+    # -------------------------
+
+    {
+        "region": "🤖 AI / технологии",
+        "source": "TechCrunch",
+        "publisher": "TechCrunch",
+        "url": "https://techcrunch.com/category/artificial-intelligence/feed/",
+    },
+
+    {
+        "region": "🤖 AI / технологии",
+        "source": "The Verge",
+        "publisher": "The Verge",
+        "url": "https://www.theverge.com/rss/index.xml",
+    },
+
+
+    # =====================================================
+    # СПОРТ
+    # =====================================================
+
+    # Общий BBC Sport
+    {
+        "region": "🏆 Спорт",
+        "source": "BBC Sport",
+        "publisher": "BBC Sport",
+        "url": "https://feeds.bbci.co.uk/sport/rss.xml",
+    },
+
+    # Футбол BBC
+    {
+        "region": "🏆 Спорт",
+        "source": "BBC Sport • Football",
+        "publisher": "BBC Sport",
+        "url": "https://feeds.bbci.co.uk/sport/football/rss.xml",
+    },
+
+    # Общий Guardian Sport
+    {
+        "region": "🏆 Спорт",
+        "source": "The Guardian Sport",
+        "publisher": "The Guardian",
+        "url": "https://www.theguardian.com/sport/rss",
+    },
+
+    # Футбол Guardian
+    {
+        "region": "🏆 Спорт",
+        "source": "The Guardian Football",
+        "publisher": "The Guardian",
+        "url": "https://www.theguardian.com/football/rss",
+    },
+
+    # Общий CBS
+    {
+        "region": "🏆 Спорт",
+        "source": "CBS Sports",
+        "publisher": "CBS Sports",
+        "url": "https://www.cbssports.com/rss/headlines/",
+    },
+
+    # Футбол CBS
+    {
+        "region": "🏆 Спорт",
+        "source": "CBS Sports • Soccer",
+        "publisher": "CBS Sports",
+        "url": "https://www.cbssports.com/rss/headlines/soccer",
+    },
+
+    # NBA
+    {
+        "region": "🏆 Спорт",
+        "source": "CBS Sports • NBA",
+        "publisher": "CBS Sports",
+        "url": "https://www.cbssports.com/rss/headlines/nba",
+    },
+
+    # Теннис
+    {
+        "region": "🏆 Спорт",
+        "source": "CBS Sports • Tennis",
+        "publisher": "CBS Sports",
+        "url": "https://www.cbssports.com/rss/headlines/tennis",
+    },
 ]
+
+
+# =========================================================
+# ГЛАВНОЕ МЕНЮ
+# =========================================================
 
 MAIN_MENU = ReplyKeyboardMarkup(
     [
         ["🔥 Главное", "⚡ Кратко"],
-        ["📰 Все новости", "💰 Финансы"],
+
+        ["📰 Все новости", "🏆 Спорт"],
+
+        ["💰 Финансы"],
+
         ["🇰🇿 Казахстан", "🇺🇸 США"],
+
         ["🇪🇺 Европа", "🇨🇳 Китай"],
+
         ["🇷🇺 Россия", "🌍 Мир"],
+
         ["🤖 AI / технологии"],
     ],
+
     resize_keyboard=True,
 )
 
-BUTTON_TO_REGION = {
-    x: x for x in [
-        "🇰🇿 Казахстан",
-        "🇺🇸 США",
-        "🇪🇺 Европа",
-        "🇨🇳 Китай",
-        "🇷🇺 Россия",
-        "🌍 Мир",
-        "🤖 AI / технологии",
-    ]
+
+# =========================================================
+# МЕНЮ СПОРТА
+# =========================================================
+
+SPORT_MENU = ReplyKeyboardMarkup(
+    [
+        ["🏆 Весь спорт"],
+
+        ["⚽ Футбол", "🏎 F1"],
+
+        ["🏀 Баскетбол", "🎾 Теннис"],
+
+        ["⬅️ Главное меню"],
+    ],
+
+    resize_keyboard=True,
+)
+
+
+REGION_BUTTONS = {
+
+    "🇰🇿 Казахстан",
+    "🇺🇸 США",
+    "🇪🇺 Европа",
+    "🇨🇳 Китай",
+    "🇷🇺 Россия",
+    "🌍 Мир",
+    "🤖 AI / технологии",
 }
+
 
 COMMAND_TO_REGION = {
-    "kz": "🇰🇿 Казахстан",
-    "usa": "🇺🇸 США",
-    "europe": "🇪🇺 Европа",
-    "china": "🇨🇳 Китай",
-    "russia": "🇷🇺 Россия",
-    "world": "🌍 Мир",
-    "ai": "🤖 AI / технологии",
+
+    "kz":
+        "🇰🇿 Казахстан",
+
+    "usa":
+        "🇺🇸 США",
+
+    "europe":
+        "🇪🇺 Европа",
+
+    "china":
+        "🇨🇳 Китай",
+
+    "russia":
+        "🇷🇺 Россия",
+
+    "world":
+        "🌍 Мир",
+
+    "ai":
+        "🤖 AI / технологии",
 }
+
+
+SPORT_FILTERS = {
+
+    "⚽ Футбол":
+        "⚽ Футбол",
+
+    "🏎 F1":
+        "🏎 F1",
+
+    "🏀 Баскетбол":
+        "🏀 Баскетбол",
+
+    "🎾 Теннис":
+        "🎾 Теннис",
+}
+
+
+SPORT_COMMANDS = {
+
+    "football":
+        "⚽ Футбол",
+
+    "f1":
+        "🏎 F1",
+
+    "basketball":
+        "🏀 Баскетбол",
+
+    "tennis":
+        "🎾 Теннис",
+}
+
+
+# =========================================================
+# КОДЫ КАТЕГОРИЙ ОТ AI
+# =========================================================
 
 REGION_CODE_TO_LABEL = {
-    "KZ": "🇰🇿 Казахстан",
-    "US": "🇺🇸 США",
-    "EUROPE": "🇪🇺 Европа",
-    "CHINA": "🇨🇳 Китай",
-    "RUSSIA": "🇷🇺 Россия",
-    "WORLD": "🌍 Мир",
-    "AI": "🤖 AI / технологии",
+
+    "KZ":
+        "🇰🇿 Казахстан",
+
+    "US":
+        "🇺🇸 США",
+
+    "EUROPE":
+        "🇪🇺 Европа",
+
+    "CHINA":
+        "🇨🇳 Китай",
+
+    "RUSSIA":
+        "🇷🇺 Россия",
+
+    "WORLD":
+        "🌍 Мир",
+
+    "AI":
+        "🤖 AI / технологии",
+
+    "SPORT_FOOTBALL":
+        "⚽ Футбол",
+
+    "SPORT_F1":
+        "🏎 F1",
+
+    "SPORT_BASKETBALL":
+        "🏀 Баскетбол",
+
+    "SPORT_TENNIS":
+        "🎾 Теннис",
+
+    "SPORT_OTHER":
+        "🏆 Другой спорт",
 }
 
+
+SPORT_LABELS = {
+
+    "⚽ Футбол",
+
+    "🏎 F1",
+
+    "🏀 Баскетбол",
+
+    "🎾 Теннис",
+
+    "🏆 Другой спорт",
+}
+
+
 IMPACT_RANK = {
+
     "LOW": 1,
+
     "MEDIUM": 2,
+
     "HIGH": 3,
 }
 
-# =========================================================
-# АКТУАЛЬНОСТЬ
-# =========================================================
-
-# До 5 публикаций с каждого RSS.
-ARTICLES_PER_FEED = 5
-
-# Всё старше 24 часов отсекаем.
-FRESH_HOURS = 24
-
-# Чтобы не перегружать Groq/Gemini одним огромным запросом.
-MAX_GLOBAL_AI_ARTICLES = 24
-
-# Максимум карточек при "Все новости".
-MAX_NEWS_EVENTS = 15
-
-# Максимум карточек в отдельном регионе.
-MAX_REGION_EVENTS = 10
-
 
 # =========================================================
-# СКРЫТЫЕ КОМПЛИМЕНТЫ ДЛЯ ЗАРИНЫ
+# КОМПЛИМЕНТЫ ДЛЯ ЗАРИНЫ
 # =========================================================
 
-ALMATY_TZ = ZoneInfo("Asia/Almaty")
+ALMATY_TZ = ZoneInfo(
+    "Asia/Almaty"
+)
+
 
 COMPLIMENTS = [
-    "Зарина, у тебя редкое сочетание любопытства и умения доводить идеи до результата.",
 
-    "Зарина, твоя энергия чувствуется даже в обычных мелочах — рядом с ней всё становится живее.",
+    "Зарина, у тебя редкое сочетание любопытства "
+    "и умения доводить идеи до результата.",
 
-    "Зарина, у тебя очень классное чувство того, как сделать сложное понятным и красивым.",
+    "Зарина, ты умеешь замечать детали, "
+    "которые другие легко пропускают.",
 
-    "Зарина, ты умеешь замечать детали, которые другие легко пропускают.",
+    "Зарина, твоя настойчивость — тихая суперсила: "
+    "если тебе что-то действительно нужно, "
+    "ты докопаешься до работающего решения.",
 
-    "Зарина, твоя настойчивость — тихая суперсила: если тебе что-то действительно нужно, ты докопаешься до работающего решения.",
+    "Зарина, у тебя есть талант превращать сырую идею "
+    "в вещь, которой реально хочется пользоваться.",
 
-    "Зарина, у тебя есть талант превращать сырую идею в вещь, которой реально хочется пользоваться.",
+    "Зарина, у тебя отлично получается не соглашаться "
+    "на «и так сойдёт» — и именно поэтому "
+    "результат становится лучше.",
 
-    "Зарина, ты очень живая: с тобой даже технические проекты внезапно обретают характер.",
+    "Зарина, ты умеешь сочетать здравый смысл "
+    "с фантазией — редкая и очень полезная смесь.",
 
-    "Зарина, твоё любопытство — один из самых красивых видов интеллекта.",
+    "Зарина, у тебя хороший внутренний радар "
+    "на то, что можно сделать удобнее, "
+    "понятнее и интереснее.",
 
-    "Зарина, у тебя хорошо получается не соглашаться на «и так сойдёт» — и именно поэтому результат становится лучше.",
+    "Зарина, твоя требовательность к качеству — "
+    "это уважение к собственному времени.",
 
-    "Зарина, ты умеешь сочетать здравый смысл с фантазией — редкая и очень полезная смесь.",
+    "Зарина, у тебя есть вкус к хорошим идеям — "
+    "и ещё более ценный навык быстро отсеивать плохие.",
 
-    "Зарина, у тебя хороший внутренний радар на то, что можно сделать удобнее, понятнее и интереснее.",
+    "Зарина, ты умеешь задать именно тот вопрос, "
+    "после которого всё начинает складываться.",
 
-    "Зарина, твоя требовательность к качеству — это не придирчивость, а уважение к собственному времени.",
+    "Зарина, ты умеешь быстро переходить "
+    "от «а что если?» к «так, давай сделаем».",
 
-    "Зарина, у тебя есть вкус к хорошим идеям — и ещё более ценный навык быстро отсеивать плохие.",
+    "Зарина, у тебя классный баланс между "
+    "«хочу красиво» и «должно нормально работать».",
 
-    "Зарина, ты умеешь задавать именно тот вопрос, после которого всё начинает складываться.",
-
-    "Зарина, твоя самостоятельность очень тебе идёт.",
-
-    "Зарина, ты умеешь учиться на ходу — без лишнего пафоса, просто берёшь и разбираешься.",
-
-    "Зарина, в тебе здорово сочетаются практичность и желание сделать всё не скучно.",
-
-    "Зарина, у тебя заметный талант к тому, чтобы превращать хаос в понятную систему.",
-
-    "Зарина, твоя внимательность к мелочам часто и создаёт тот самый результат, который выглядит «просто хорошо».",
-
-    "Зарина, ты умеешь не только придумать идею, но и сразу спросить: «а как сделать это реально работающим?» — это дорогого стоит.",
-
-    "Зарина, твой характер отлично подходит людям, которые создают своё: любопытство, вкус и немного упрямства в правильных пропорциях.",
-
-    "Зарина, у тебя классная способность быстро понимать, что тебе подходит, а что — вообще нет.",
-
-    "Зарина, ты не боишься переделывать, если можно сделать лучше. Это очень сильная привычка.",
-
-    "Зарина, у тебя есть то самое чувство меры: где добавить, где убрать, а где оставить всё как есть.",
-
-    "Зарина, твоя прямота экономит кучу времени — и делает хорошие идеи ещё лучше.",
-
-    "Зарина, ты умеешь делать обычные вещи немного более интересными — это настоящий талант.",
-
-    "Зарина, у тебя хороший баланс между «хочу красиво» и «должно нормально работать».",
-
-    "Зарина, твоя любознательность точно не даёт жизни становиться скучной.",
-
-    "Зарина, у тебя сильное чувство собственного стандарта качества — и это видно.",
-
-    "Зарина, ты умеешь быстро переходить от «а что если?» к «так, давай сделаем». Это очень круто.",
-
-    "Зарина, сегодня тебе полагается официальный комплимент: ты заметно интереснее среднестатистического понедельника 😄",
+    "Зарина, сегодня тебе полагается официальный "
+    "комплимент: ты заметно интереснее "
+    "среднестатистического понедельника 😄",
 ]
 
 
 # =========================================================
-# ФИЛЬТР ПЛОХИХ КАРТИНОК
+# КАРТИНКИ
 # =========================================================
 
 BAD_IMAGE_WORDS = (
+
     "logo",
     "favicon",
     "icon",
@@ -216,14 +541,23 @@ BAD_IMAGE_WORDS = (
 # WEB SERVER ДЛЯ RENDER
 # =========================================================
 
-class HealthHandler(BaseHTTPRequestHandler):
+class HealthHandler(
+    BaseHTTPRequestHandler
+):
 
-    def do_GET(self):
-        self.send_response(200)
+    def do_GET(
+        self
+    ):
+
+        self.send_response(
+            200
+        )
+
         self.send_header(
             "Content-type",
             "text/plain",
         )
+
         self.end_headers()
 
         self.wfile.write(
@@ -235,6 +569,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         format,
         *args
     ):
+
         return
 
 
@@ -248,7 +583,11 @@ def run_web_server():
     )
 
     server = HTTPServer(
-        ("0.0.0.0", port),
+        (
+            "0.0.0.0",
+            port,
+        ),
+
         HealthHandler,
     )
 
@@ -260,12 +599,15 @@ def run_web_server():
 
 
 # =========================================================
-# ТЕКСТ
+# ОЧИСТКА ТЕКСТА
 # =========================================================
 
-def clean_text(text):
+def clean_text(
+    text
+):
 
     if not text:
+
         return ""
 
     text = html.unescape(
@@ -280,12 +622,21 @@ def clean_text(text):
 
     return " ".join(
         text
-        .replace("\n", " ")
+        .replace(
+            "\n",
+            " ",
+        )
         .split()
     )
 
 
-def protected_terms(text):
+# =========================================================
+# ЗАЩИТА ИМЁН И БРЕНДОВ
+# =========================================================
+
+def protected_terms(
+    text
+):
 
     tokens = re.findall(
         r"\b[A-Za-z0-9][A-Za-z0-9.+#&'_-]*\b",
@@ -297,32 +648,39 @@ def protected_terms(text):
     for token in tokens:
 
         special = (
+
             any(
                 ch.isupper()
                 for ch in token[1:]
             )
+
             or
+
             any(
                 ch.isdigit()
                 for ch in token
             )
+
             or
+
             (
                 len(token) >= 2
-                and token.isupper()
+                and
+                token.isupper()
             )
         )
 
         if (
             special
-            and token not in result
+            and
+            token not in result
         ):
 
             result.append(
                 token
             )
 
-    return result[:12]
+    return result[:14]
 
 
 # =========================================================
@@ -335,13 +693,16 @@ def normalize_image_url(
 ):
 
     if not url:
+
         return None
 
     url = html.unescape(
         str(url)
     ).strip()
 
-    if url.startswith("//"):
+    if url.startswith(
+        "//"
+    ):
 
         url = (
             "https:"
@@ -364,12 +725,9 @@ def normalize_image_url(
 
         return None
 
-    lowered = (
-        url.lower()
-    )
-
     if any(
-        word in lowered
+        word in url.lower()
+
         for word in BAD_IMAGE_WORDS
     ):
 
@@ -438,6 +796,7 @@ def image_from_feed_entry(
             item,
             dict,
         ):
+
             continue
 
         media_type = (
@@ -462,56 +821,13 @@ def image_from_feed_entry(
                 )
             )
 
-    for item in (
-        entry.get(
-            "links",
-            [],
-        )
-        or
-        []
-    ):
-
-        if not isinstance(
-            item,
-            dict,
-        ):
-            continue
-
-        media_type = (
-            item.get(
-                "type"
-            )
-            or
-            ""
-        ).lower()
-
-        rel = (
-            item.get(
-                "rel"
-            )
-            or
-            ""
-        ).lower()
-
-        if (
-            media_type.startswith(
-                "image/"
-            )
-            or
-            rel == "enclosure"
-        ):
-
-            candidates.append(
-                item.get(
-                    "href"
-                )
-            )
-
     for candidate in candidates:
 
-        image_url = normalize_image_url(
-            candidate,
-            article_url,
+        image_url = (
+            normalize_image_url(
+                candidate,
+                article_url,
+            )
         )
 
         if image_url:
@@ -525,14 +841,16 @@ def image_from_article_page(
     article_url
 ):
 
-    if not article_url:
+    if (
+        not article_url
 
-        return None
+        or
 
-    if not article_url.startswith(
-        (
-            "http://",
-            "https://",
+        not article_url.startswith(
+            (
+                "http://",
+                "https://",
+            )
         )
     ):
 
@@ -560,11 +878,10 @@ def image_from_article_page(
         )
 
         patterns = [
+
             r'<meta[^>]+(?:property|name)=["\'](?:og:image|twitter:image|twitter:image:src)["\'][^>]+content=["\']([^"\']+)["\']',
 
             r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\'](?:og:image|twitter:image|twitter:image:src)["\']',
-
-            r'<link[^>]+rel=["\']image_src["\'][^>]+href=["\']([^"\']+)["\']',
         ]
 
         for pattern in patterns:
@@ -577,9 +894,11 @@ def image_from_article_page(
 
             if match:
 
-                image_url = normalize_image_url(
-                    match.group(1),
-                    article_url,
+                image_url = (
+                    normalize_image_url(
+                        match.group(1),
+                        article_url,
+                    )
                 )
 
                 if image_url:
@@ -590,50 +909,8 @@ def image_from_article_page(
 
         print(
             "Image page error:",
-            article_url,
             repr(error),
         )
-
-    return None
-
-
-def ensure_event_image(
-    event
-):
-
-    if event.get(
-        "image_url"
-    ):
-
-        return event[
-            "image_url"
-        ]
-
-    sources = unique_sources(
-        event.get(
-            "sources",
-            [],
-        )
-    )
-
-    for source in sources[:2]:
-
-        image_url = (
-            image_from_article_page(
-                source.get(
-                    "link",
-                    "",
-                )
-            )
-        )
-
-        if image_url:
-
-            event[
-                "image_url"
-            ] = image_url
-
-            return image_url
 
     return None
 
@@ -642,16 +919,23 @@ def ensure_event_image(
 # ВРЕМЯ ПУБЛИКАЦИИ
 # =========================================================
 
-def parse_entry_timestamp(entry):
+def parse_entry_timestamp(
+    entry
+):
 
     for key in (
+
         "published_parsed",
+
         "updated_parsed",
+
         "created_parsed",
     ):
 
-        parsed = entry.get(
-            key
+        parsed = (
+            entry.get(
+                key
+            )
         )
 
         if parsed:
@@ -669,16 +953,22 @@ def parse_entry_timestamp(entry):
                 pass
 
     for key in (
+
         "published",
+
         "updated",
+
         "created",
     ):
 
-        raw = entry.get(
-            key
+        raw = (
+            entry.get(
+                key
+            )
         )
 
         if not raw:
+
             continue
 
         try:
@@ -706,16 +996,14 @@ def parse_entry_timestamp(entry):
 
         try:
 
-            value = (
-                str(raw)
-                .replace(
-                    "Z",
-                    "+00:00",
+            dt = (
+                datetime.fromisoformat(
+                    str(raw)
+                    .replace(
+                        "Z",
+                        "+00:00",
+                    )
                 )
-            )
-
-            dt = datetime.fromisoformat(
-                value
             )
 
             if dt.tzinfo is None:
@@ -737,7 +1025,7 @@ def parse_entry_timestamp(entry):
 
 
 # =========================================================
-# RSS — 5 ПОСЛЕДНИХ ИЗ КАЖДОГО
+# ЗАГРУЗКА ОДНОГО RSS
 # =========================================================
 
 def fetch_feed_articles(
@@ -749,7 +1037,9 @@ def fetch_feed_articles(
     try:
 
         response = requests.get(
-            feed_info["url"],
+            feed_info[
+                "url"
+            ],
 
             headers={
                 "User-Agent":
@@ -765,11 +1055,14 @@ def fetch_feed_articles(
             response.content
         )
 
-        now_ts = time.time()
+        now_ts = (
+            time.time()
+        )
 
         max_age = (
             FRESH_HOURS
-            * 3600
+            *
+            3600
         )
 
         for entry in (
@@ -786,6 +1079,7 @@ def fetch_feed_articles(
             )
 
             if not title:
+
                 continue
 
             published_ts = (
@@ -794,15 +1088,10 @@ def fetch_feed_articles(
                 )
             )
 
-            # Если RSS вообще не сообщил время,
-            # честно не считаем такой материал свежим.
+            # Если RSS вообще не сообщает
+            # время публикации,
+            # не называем материал свежим наугад.
             if published_ts is None:
-
-                print(
-                    f"Skip undated article "
-                    f"{feed_info['source']}: "
-                    f"{title[:80]}"
-                )
 
                 continue
 
@@ -812,23 +1101,39 @@ def fetch_feed_articles(
                 published_ts
             )
 
-            # Всё старше 24 часов исключаем.
+            # Старше 24 часов.
             if age > max_age:
+
                 continue
 
-            description = clean_text(
-                entry.get(
-                    "summary",
+            # Защита от неправильной даты
+            # сильно из будущего.
+            if age < (
+                -6
+                *
+                3600
+            ):
+
+                continue
+
+            description = (
+                clean_text(
                     entry.get(
-                        "description",
-                        "",
-                    ),
+                        "summary",
+
+                        entry.get(
+                            "description",
+                            "",
+                        ),
+                    )
                 )
             )
 
-            link = entry.get(
-                "link",
-                "",
+            link = (
+                entry.get(
+                    "link",
+                    "",
+                )
             )
 
             result.append(
@@ -842,6 +1147,15 @@ def fetch_feed_articles(
                         feed_info[
                             "source"
                         ],
+
+                    "publisher":
+                        feed_info.get(
+                            "publisher",
+
+                            feed_info[
+                                "source"
+                            ],
+                        ),
 
                     "title":
                         title,
@@ -864,8 +1178,10 @@ def fetch_feed_articles(
                     "protected":
                         protected_terms(
                             title
-                            + " "
-                            + description
+                            +
+                            " "
+                            +
+                            description
                         ),
                 }
             )
@@ -881,19 +1197,28 @@ def fetch_feed_articles(
     return result
 
 
+# =========================================================
+# СОБИРАЕМ ВСЕ RSS
+# =========================================================
+
 def collect_articles(
     region_filter=None
 ):
 
     feeds = [
+
         feed
 
         for feed in NEWS_FEEDS
 
         if (
             not region_filter
+
             or
-            feed["region"]
+
+            feed[
+                "region"
+            ]
             ==
             region_filter
         )
@@ -905,25 +1230,24 @@ def collect_articles(
 
     articles = []
 
-    # Загружаем RSS параллельно,
-    # чтобы 14 источников не ждали друг друга.
+    # Все RSS загружаем параллельно.
     with ThreadPoolExecutor(
         max_workers=
             min(
-                8,
+                10,
                 len(feeds),
             )
     ) as executor:
 
-        futures = {
+        futures = [
+
             executor.submit(
                 fetch_feed_articles,
                 feed,
-            ):
-                feed
+            )
 
             for feed in feeds
-        }
+        ]
 
         for future in (
             as_completed(
@@ -944,9 +1268,10 @@ def collect_articles(
                     repr(error),
                 )
 
-    # Удаляем точные дубликаты ссылок.
+    # Убираем точные дубликаты.
     unique = []
-    seen_links = set()
+
+    seen = set()
 
     for article in articles:
 
@@ -954,10 +1279,12 @@ def collect_articles(
             article.get(
                 "link"
             )
+
             or
+
             (
                 article.get(
-                    "source"
+                    "publisher"
                 ),
 
                 article.get(
@@ -966,11 +1293,11 @@ def collect_articles(
             )
         )
 
-        if key in seen_links:
+        if key in seen:
 
             continue
 
-        seen_links.add(
+        seen.add(
             key
         )
 
@@ -978,8 +1305,9 @@ def collect_articles(
             article
         )
 
-    # Самые новые — первыми.
+    # На вход AI сначала идут свежие.
     unique.sort(
+
         key=lambda item:
             item.get(
                 "published_ts",
@@ -993,75 +1321,137 @@ def collect_articles(
 
 
 # =========================================================
-# ЧТО ОТПРАВЛЯЕМ В AI
+# ОТБОР КАНДИДАТОВ ДЛЯ AI
 # =========================================================
 
 def select_articles_for_ai(
-    articles,
-    region_filter=None,
+    articles
 ):
 
-    # В одном регионе статей обычно немного,
-    # поэтому можно обработать все.
-    if region_filter:
+    # Не даём одной редакции
+    # заполнить весь AI-запрос.
 
-        return articles[
-            :MAX_GLOBAL_AI_ARTICLES
-        ]
+    by_publisher = defaultdict(
+        list
+    )
 
-    selected = []
-    selected_keys = set()
-    used_sources = set()
-
-    # Сначала берём по одной самой свежей
-    # публикации от каждого СМИ.
     for article in articles:
 
-        source = article.get(
-            "source"
+        publisher = (
+            article.get(
+                "publisher",
+
+                article.get(
+                    "source"
+                ),
+            )
         )
 
-        if source in used_sources:
-
-            continue
-
-        selected.append(
+        by_publisher[
+            publisher
+        ].append(
             article
         )
 
-        selected_keys.add(
-            article.get(
-                "link"
-            )
-            or
-            id(article)
-        )
+    selected = []
 
-        used_sources.add(
-            source
-        )
+    used = set()
 
-        if (
-            len(selected)
-            >=
-            MAX_GLOBAL_AI_ARTICLES
+    # Сначала до 3 свежих материалов
+    # от каждой независимой редакции.
+    for round_index in range(
+        3
+    ):
+
+        for publisher in sorted(
+            by_publisher
         ):
 
-            return selected
+            items = (
+                by_publisher[
+                    publisher
+                ]
+            )
 
-    # Оставшиеся места заполняем
-    # самыми свежими публикациями.
+            if (
+                round_index
+                >=
+                len(
+                    items
+                )
+            ):
+
+                continue
+
+            article = (
+                items[
+                    round_index
+                ]
+            )
+
+            key = (
+                article.get(
+                    "link"
+                )
+
+                or
+
+                id(
+                    article
+                )
+            )
+
+            if key in used:
+
+                continue
+
+            selected.append(
+                article
+            )
+
+            used.add(
+                key
+            )
+
+            if (
+                len(
+                    selected
+                )
+                >=
+                MAX_AI_ARTICLES
+            ):
+
+                selected.sort(
+
+                    key=lambda item:
+                        item.get(
+                            "published_ts",
+                            0,
+                        ),
+
+                    reverse=True,
+                )
+
+                return selected
+
+    # Оставшиеся места —
+    # самые свежие статьи,
+    # которые ещё не выбраны.
     for article in articles:
 
         key = (
             article.get(
                 "link"
             )
+
             or
-            id(article)
+
+            id(
+                article
+            )
         )
 
-        if key in selected_keys:
+        if key in used:
 
             continue
 
@@ -1069,19 +1459,22 @@ def select_articles_for_ai(
             article
         )
 
-        selected_keys.add(
+        used.add(
             key
         )
 
         if (
-            len(selected)
+            len(
+                selected
+            )
             >=
-            MAX_GLOBAL_AI_ARTICLES
+            MAX_AI_ARTICLES
         ):
 
             break
 
     selected.sort(
+
         key=lambda item:
             item.get(
                 "published_ts",
@@ -1104,16 +1497,12 @@ def make_ai_prompt(
 
     blocks = []
 
-    for index, article in enumerate(
+    for (
+        index,
+        article,
+    ) in enumerate(
         articles
     ):
-
-        description = clean_text(
-            article.get(
-                "description",
-                "",
-            )
-        )[:600]
 
         protected = ", ".join(
             article.get(
@@ -1122,86 +1511,176 @@ def make_ai_prompt(
             )
         ) or "нет"
 
+        description = (
+            clean_text(
+                article.get(
+                    "description",
+                    "",
+                )
+            )[
+                :700
+            ]
+        )
+
         blocks.append(
             f"""
 NEWS_{index}
 SOURCE_BUCKET: {article['source_region']}
 SOURCE: {article['source']}
+PUBLISHER: {article['publisher']}
 TITLE: {article['title']}
 DESCRIPTION: {description}
 PROTECTED_TERMS: {protected}
 """.strip()
         )
 
-    articles_text = "\n\n".join(
-        blocks
+    articles_text = (
+        "\n\n".join(
+            blocks
+        )
     )
 
     return f"""
 Ты редактор русскоязычного новостного агрегатора.
 
-SOURCE_BUCKET — это только технический раздел RSS.
-Он НЕ означает место события.
+ВАЖНО:
+порядок статьи в RSS НЕ означает,
+что она важнее других.
+
+Нужно оценивать само событие.
 
 Для каждого NEWS_:
 
-1. Переведи заголовок на естественный русский.
+1. Переведи заголовок
+на естественный русский язык.
 
-2. Дай краткое описание максимум в 1–2 предложениях.
+2. Дай краткое описание
+максимум в 1–2 предложениях.
 
 3. Используй только TITLE и DESCRIPTION.
 Ничего не выдумывай.
 
-4. Никогда не заменяй человека,
-компанию, бренд или продукт на другого.
+4. Никогда не заменяй
+человека,
+спортсмена,
+команду,
+компанию,
+бренд
+или продукт на другого.
 
-PROTECTED_TERMS сохраняй ТОЧНО.
+PROTECTED_TERMS сохраняй точно.
 
-Например:
-MrBeast нельзя превращать в Microsoft.
+Если русское написание имени неоднозначно,
+оставь его латиницей.
 
-5. Определи реальную категорию:
+5. Определи реальную категорию события.
 
-KZ = Казахстан
-US = США
-EUROPE = Европа
-CHINA = Китай
-RUSSIA = Россия
-AI = AI / технологии
-WORLD = всё остальное,
-другая страна
-или международное событие
+Допустимые коды:
 
-6. Если публикации описывают
-одно и то же конкретное событие,
+KZ
+= Казахстан
+
+US
+= США
+
+EUROPE
+= Европа
+
+CHINA
+= Китай
+
+RUSSIA
+= Россия
+
+AI
+= AI / технологии
+
+SPORT_FOOTBALL
+= футбол
+
+SPORT_F1
+= Formula 1 / F1
+
+SPORT_BASKETBALL
+= баскетбол / NBA
+
+SPORT_TENNIS
+= теннис
+
+SPORT_OTHER
+= любой другой спорт
+
+WORLD
+= всё остальное
+
+Если главная суть публикации —
+матч,
+гонка,
+турнир,
+спортсмен,
+команда,
+трансфер,
+чемпионат,
+рекорд,
+результат,
+травма спортсмена
+или спортивная организация,
+выбирай соответствующую SPORT-категорию.
+
+6. Если несколько публикаций
+описывают ОДНО И ТО ЖЕ
+конкретное событие,
 дай им одинаковый EVENT_ID.
+
+Похожие темы
+не объединяй.
 
 Если сомневаешься —
 не объединяй.
 
-7. Оцени масштаб:
+7. Оцени значимость события:
 
-HIGH
-MEDIUM
-LOW
+HIGH =
+крупное событие национального
+или международного масштаба,
+финал,
+чемпионство,
+важный матч,
+крупный рекорд,
+значимый трансфер,
+важное решение,
+кризис
+или событие большого масштаба.
 
-8. Заявления,
+MEDIUM =
+заметное событие
+более узкого масштаба.
+
+LOW =
+рутинная,
+нишевая
+или малозначимая публикация.
+
+8. Не повышай важность
+из-за кликбейтного заголовка.
+
+9. Слухи,
 обвинения,
-предположения
+заявления
 и прогнозы
 не представляй
 как установленный факт.
 
-Верни ровно одну строку
-для каждого NEWS_.
+Верни РОВНО одну строку
+на каждый NEWS_.
 
 Формат:
 
-NEWS_0|||EVENT_1|||HIGH|||WORLD|||РУССКИЙ ЗАГОЛОВОК|||КРАТКОЕ ОПИСАНИЕ
+NEWS_0|||EVENT_1|||HIGH|||SPORT_FOOTBALL|||РУССКИЙ ЗАГОЛОВОК|||КРАТКОЕ ОПИСАНИЕ
 
 Не используй Markdown.
 Не используй JSON.
-Не пиши пояснений.
+Не пиши никаких пояснений.
 
 Публикации:
 
@@ -1217,8 +1696,10 @@ def call_groq(
     prompt
 ):
 
-    api_key = os.environ.get(
-        "GROQ_API_KEY"
+    api_key = (
+        os.environ.get(
+            "GROQ_API_KEY"
+        )
     )
 
     if not api_key:
@@ -1230,7 +1711,9 @@ def call_groq(
         "openai/v1/chat/completions"
     )
 
-    for attempt in range(2):
+    for attempt in range(
+        2
+    ):
 
         try:
 
@@ -1263,7 +1746,7 @@ def call_groq(
                         0.1,
 
                     "max_completion_tokens":
-                        5000,
+                        6500,
 
                     "reasoning_effort":
                         "low",
@@ -1275,7 +1758,7 @@ def call_groq(
                         False,
                 },
 
-                timeout=70,
+                timeout=80,
             )
 
             if (
@@ -1289,8 +1772,11 @@ def call_groq(
                 )
 
                 text = (
-                    data["choices"][0]
-                    ["message"]
+                    data[
+                        "choices"
+                    ][0][
+                        "message"
+                    ]
                     .get(
                         "content",
                         "",
@@ -1313,13 +1799,23 @@ def call_groq(
             )
 
             if (
-                response.status_code == 429
+                response.status_code
+                ==
+                429
+
                 or
-                response.status_code >= 500
+
+                response.status_code
+                >=
+                500
             ):
 
                 time.sleep(
-                    2 + attempt * 2
+                    2
+                    +
+                    attempt
+                    *
+                    2
                 )
 
                 continue
@@ -1334,7 +1830,11 @@ def call_groq(
             )
 
             time.sleep(
-                2 + attempt * 2
+                2
+                +
+                attempt
+                *
+                2
             )
 
     return None
@@ -1348,8 +1848,10 @@ def call_gemini(
     prompt
 ):
 
-    api_key = os.environ.get(
-        "GEMINI_API_KEY"
+    api_key = (
+        os.environ.get(
+            "GEMINI_API_KEY"
+        )
     )
 
     if not api_key:
@@ -1362,7 +1864,9 @@ def call_gemini(
         f"{GEMINI_MODEL}:generateContent"
     )
 
-    for attempt in range(2):
+    for attempt in range(
+        2
+    ):
 
         try:
 
@@ -1394,11 +1898,11 @@ def call_gemini(
                             0.1,
 
                         "maxOutputTokens":
-                            5000,
+                            6500,
                     },
                 },
 
-                timeout=80,
+                timeout=90,
             )
 
             if (
@@ -1407,12 +1911,9 @@ def call_gemini(
                 200
             ):
 
-                data = (
-                    response.json()
-                )
-
                 candidates = (
-                    data.get(
+                    response.json()
+                    .get(
                         "candidates",
                         [],
                     )
@@ -1433,6 +1934,7 @@ def call_gemini(
                     )
 
                     text = "\n".join(
+
                         part.get(
                             "text",
                             "",
@@ -1443,6 +1945,7 @@ def call_gemini(
                         if part.get(
                             "text"
                         )
+
                     ).strip()
 
                     if text:
@@ -1461,13 +1964,23 @@ def call_gemini(
             )
 
             if (
-                response.status_code == 429
+                response.status_code
+                ==
+                429
+
                 or
-                response.status_code >= 500
+
+                response.status_code
+                >=
+                500
             ):
 
                 time.sleep(
-                    2 + attempt * 2
+                    2
+                    +
+                    attempt
+                    *
+                    2
                 )
 
                 continue
@@ -1482,7 +1995,11 @@ def call_gemini(
             )
 
             time.sleep(
-                2 + attempt * 2
+                2
+                +
+                attempt
+                *
+                2
             )
 
     return None
@@ -1496,7 +2013,9 @@ def ask_ai(
         call_groq(
             prompt
         )
+
         or
+
         call_gemini(
             prompt
         )
@@ -1509,7 +2028,7 @@ def ask_ai(
 
 def parse_ai_response(
     raw_text,
-    article_count,
+    article_count
 ):
 
     processed = {}
@@ -1532,12 +2051,20 @@ def parse_ai_response(
 
             continue
 
-        pieces = line.split(
-            "|||",
-            5,
+        pieces = (
+            line.split(
+                "|||",
+                5,
+            )
         )
 
-        if len(pieces) != 6:
+        if (
+            len(
+                pieces
+            )
+            !=
+            6
+        ):
 
             continue
 
@@ -1557,8 +2084,10 @@ def parse_ai_response(
 
         if not (
             0
-            <= index
-            < article_count
+            <=
+            index
+            <
+            article_count
         ):
 
             continue
@@ -1569,7 +2098,7 @@ def parse_ai_response(
             .upper()
         )
 
-        region = (
+        code = (
             pieces[3]
             .strip()
             .upper()
@@ -1577,14 +2106,20 @@ def parse_ai_response(
 
         if impact not in IMPACT_RANK:
 
-            impact = "MEDIUM"
+            impact = (
+                "MEDIUM"
+            )
 
-        processed[index] = {
+        processed[
+            index
+        ] = {
 
             "event_id":
                 pieces[1]
                 .strip()
+
                 or
+
                 f"EVENT_{index}",
 
             "impact":
@@ -1592,7 +2127,7 @@ def parse_ai_response(
 
             "display_region":
                 REGION_CODE_TO_LABEL.get(
-                    region,
+                    code,
                     "🌍 Мир",
                 ),
 
@@ -1608,46 +2143,68 @@ def parse_ai_response(
     return processed
 
 
+# =========================================================
+# AI ОБРАБОТКА
+# =========================================================
+
 def process_articles_with_ai(
     articles
 ):
 
-    prompt = make_ai_prompt(
-        articles
+    if not articles:
+
+        return None
+
+    prompt = (
+        make_ai_prompt(
+            articles
+        )
     )
 
-    groq_result = parse_ai_response(
-        call_groq(
-            prompt
-        ),
+    groq_result = (
+        parse_ai_response(
+            call_groq(
+                prompt
+            ),
 
-        len(
-            articles
-        ),
+            len(
+                articles
+            ),
+        )
     )
 
     if (
-        len(groq_result)
+        len(
+            groq_result
+        )
         ==
-        len(articles)
+        len(
+            articles
+        )
     ):
 
         return groq_result
 
-    gemini_result = parse_ai_response(
-        call_gemini(
-            prompt
-        ),
+    gemini_result = (
+        parse_ai_response(
+            call_gemini(
+                prompt
+            ),
 
-        len(
-            articles
-        ),
+            len(
+                articles
+            ),
+        )
     )
 
     if (
-        len(gemini_result)
+        len(
+            gemini_result
+        )
         ==
-        len(articles)
+        len(
+            articles
+        )
     ):
 
         return gemini_result
@@ -1656,7 +2213,10 @@ def process_articles_with_ai(
         groq_result
     )
 
-    for index, item in (
+    for (
+        index,
+        item,
+    ) in (
         gemini_result.items()
     ):
 
@@ -1665,7 +2225,13 @@ def process_articles_with_ai(
             item,
         )
 
-    return merged or None
+    return (
+        merged
+
+        or
+
+        None
+    )
 
 
 # =========================================================
@@ -1674,14 +2240,19 @@ def process_articles_with_ai(
 
 def fallback_processed(
     articles,
-    existing=None,
+    existing=None
 ):
 
     result = dict(
-        existing or {}
+        existing
+        or
+        {}
     )
 
-    for index, article in enumerate(
+    for (
+        index,
+        article,
+    ) in enumerate(
         articles
     ):
 
@@ -1714,39 +2285,54 @@ def fallback_processed(
 
 
 # =========================================================
-# ГРУППИРОВКА ОДИНАКОВЫХ СОБЫТИЙ
+# ОБЪЕДИНЕНИЕ ОДИНАКОВЫХ СОБЫТИЙ
 # =========================================================
 
 def group_articles(
     articles,
-    processed,
+    processed
 ):
 
     events = (
         OrderedDict()
     )
 
-    for index, article in enumerate(
+    for (
+        index,
+        article,
+    ) in enumerate(
         articles
     ):
 
-        data = processed.get(
-            index,
-            {},
+        data = (
+            processed.get(
+                index,
+                {},
+            )
         )
 
-        event_id = data.get(
-            "event_id",
-            f"FALLBACK_{index}",
+        event_id = (
+            data.get(
+                "event_id",
+
+                f"FALLBACK_{index}",
+            )
         )
 
-        if event_id not in events:
+        if (
+            event_id
+            not in
+            events
+        ):
 
-            events[event_id] = {
+            events[
+                event_id
+            ] = {
 
                 "region":
                     data.get(
                         "display_region",
+
                         article[
                             "source_region"
                         ],
@@ -1755,6 +2341,7 @@ def group_articles(
                 "title":
                     data.get(
                         "title_ru",
+
                         article[
                             "title"
                         ],
@@ -1789,11 +2376,14 @@ def group_articles(
 
         else:
 
+            # Событие считается свежим
+            # по самой новой публикации.
             events[
                 event_id
             ][
                 "published_ts"
             ] = max(
+
                 events[
                     event_id
                 ].get(
@@ -1807,6 +2397,9 @@ def group_articles(
                 ),
             )
 
+            # Если один из источников
+            # оценил событие выше,
+            # сохраняем более высокий уровень.
             old_impact = (
                 events[
                     event_id
@@ -1847,7 +2440,9 @@ def group_articles(
                 ].get(
                     "image_url"
                 )
+
                 and
+
                 article.get(
                     "image_url"
                 )
@@ -1857,9 +2452,11 @@ def group_articles(
                     event_id
                 ][
                     "image_url"
-                ] = article[
-                    "image_url"
-                ]
+                ] = (
+                    article[
+                        "image_url"
+                    ]
+                )
 
         events[
             event_id
@@ -1871,6 +2468,15 @@ def group_articles(
                     article[
                         "source"
                     ],
+
+                "publisher":
+                    article.get(
+                        "publisher",
+
+                        article[
+                            "source"
+                        ],
+                    ),
 
                 "link":
                     article[
@@ -1884,16 +2490,22 @@ def group_articles(
     )
 
 
-def unique_sources(
+# =========================================================
+# ИСТОЧНИКИ
+# =========================================================
+
+def unique_source_links(
     sources
 ):
 
     result = []
+
     seen = set()
 
     for source in sources:
 
         key = (
+
             source.get(
                 "name",
                 "",
@@ -1905,17 +2517,225 @@ def unique_sources(
             ),
         )
 
-        if key not in seen:
+        if key in seen:
 
-            seen.add(
-                key
-            )
+            continue
 
-            result.append(
-                source
-            )
+        seen.add(
+            key
+        )
+
+        result.append(
+            source
+        )
 
     return result
+
+
+def unique_publishers(
+    sources
+):
+
+    result = []
+
+    seen = set()
+
+    for source in sources:
+
+        publisher = (
+
+            source.get(
+                "publisher"
+            )
+
+            or
+
+            source.get(
+                "name"
+            )
+
+            or
+
+            "Источник"
+        )
+
+        if publisher in seen:
+
+            continue
+
+        seen.add(
+            publisher
+        )
+
+        result.append(
+            publisher
+        )
+
+    return result
+
+
+# =========================================================
+# КАЧЕСТВО / РАНЖИРОВАНИЕ
+# =========================================================
+
+def event_quality_key(
+    event
+):
+
+    """
+    Новости НЕ сортируются
+    по позиции в RSS.
+
+    Порядок:
+
+    1. Значимость события.
+    2. Количество независимых редакций.
+    3. Свежесть публикации.
+    """
+
+    publishers_count = len(
+        unique_publishers(
+            event.get(
+                "sources",
+                [],
+            )
+        )
+    )
+
+    return (
+
+        IMPACT_RANK.get(
+            event.get(
+                "impact",
+                "MEDIUM",
+            ),
+            0,
+        ),
+
+        min(
+            publishers_count,
+            5,
+        ),
+
+        event.get(
+            "published_ts",
+            0,
+        ),
+    )
+
+
+def rank_events(
+    events
+):
+
+    return sorted(
+        events,
+
+        key=
+            event_quality_key,
+
+        reverse=True,
+    )
+
+
+# =========================================================
+# ВОЗРАСТ НОВОСТИ
+# =========================================================
+
+def format_age(
+    published_ts
+):
+
+    if not published_ts:
+
+        return None
+
+    seconds = max(
+        0,
+
+        time.time()
+        -
+        published_ts,
+    )
+
+    minutes = int(
+        seconds
+        //
+        60
+    )
+
+    if minutes < 1:
+
+        return (
+            "только что"
+        )
+
+    if minutes < 60:
+
+        return (
+            f"{minutes} мин назад"
+        )
+
+    hours = int(
+        minutes
+        //
+        60
+    )
+
+    return (
+        f"{hours} ч назад"
+    )
+
+
+# =========================================================
+# ФОТО СОБЫТИЯ
+# =========================================================
+
+def ensure_event_image(
+    event
+):
+
+    if event.get(
+        "image_url"
+    ):
+
+        return (
+            event[
+                "image_url"
+            ]
+        )
+
+    sources = (
+        unique_source_links(
+            event.get(
+                "sources",
+                [],
+            )
+        )
+    )
+
+    for source in (
+        sources[:2]
+    ):
+
+        image_url = (
+            image_from_article_page(
+                source.get(
+                    "link",
+                    "",
+                )
+            )
+        )
+
+        if image_url:
+
+            event[
+                "image_url"
+            ] = image_url
+
+            return image_url
+
+    return None
 
 
 # =========================================================
@@ -1924,7 +2744,7 @@ def unique_sources(
 
 def save_event_card(
     application,
-    event,
+    event
 ):
 
     card_id = (
@@ -1944,12 +2764,21 @@ def save_event_card(
         card_id
     ] = event
 
-    while len(cards) > 300:
+    while (
+        len(
+            cards
+        )
+        >
+        300
+    ):
 
         cards.pop(
             next(
-                iter(cards)
+                iter(
+                    cards
+                )
             ),
+
             None,
         )
 
@@ -1991,147 +2820,37 @@ def make_news_keyboard(
 
 
 # =========================================================
-# КОЛИЧЕСТВО ИСТОЧНИКОВ
+# ТЕКСТ КАРТОЧКИ
 # =========================================================
-
-def source_count_word(
-    count
-):
-
-    if (
-        count % 10 == 1
-        and
-        count % 100 != 11
-    ):
-
-        return "источник"
-
-    if (
-        count % 10
-        in
-        (
-            2,
-            3,
-            4,
-        )
-        and
-        count % 100
-        not in
-        (
-            12,
-            13,
-            14,
-        )
-    ):
-
-        return "источника"
-
-    return "источников"
-
-
-def format_age(
-    published_ts
-):
-
-    if not published_ts:
-
-        return None
-
-    seconds = max(
-        0,
-        time.time()
-        -
-        published_ts,
-    )
-
-    minutes = int(
-        seconds
-        //
-        60
-    )
-
-    if minutes < 1:
-
-        return "только что"
-
-    if minutes < 60:
-
-        return (
-            f"{minutes} мин назад"
-        )
-
-    hours = int(
-        minutes
-        //
-        60
-    )
-
-    return (
-        f"{hours} ч назад"
-    )
-
 
 def make_event_text(
     event
 ):
 
-    sources = unique_sources(
-        event[
-            "sources"
-        ]
+    sources = (
+        unique_source_links(
+            event.get(
+                "sources",
+                [],
+            )
+        )
     )
 
     event[
         "sources"
     ] = sources
 
-    source_names = []
+    publishers = (
+        unique_publishers(
+            sources
+        )
+    )
 
-    for source in sources:
-
-        if (
-            source[
-                "name"
-            ]
-            not in source_names
-        ):
-
-            source_names.append(
-                source[
-                    "name"
-                ]
+    age = (
+        format_age(
+            event.get(
+                "published_ts"
             )
-
-    if len(
-        source_names
-    ) >= 2:
-
-        sources_text = (
-            f"✅ Пишут "
-            f"{len(source_names)} "
-            f"{source_count_word(len(source_names))}: "
-            +
-            " • ".join(
-                source_names
-            )
-        )
-
-    elif source_names:
-
-        sources_text = (
-            f"⚠️ Пока 1 источник: "
-            f"{source_names[0]}"
-        )
-
-    else:
-
-        sources_text = (
-            "⚠️ Источник не указан"
-        )
-
-    age_text = format_age(
-        event.get(
-            "published_ts"
         )
     )
 
@@ -2140,34 +2859,66 @@ def make_event_text(
         f"📰 {event['title']}\n"
     )
 
-    if event[
+    if event.get(
         "summary"
-    ]:
+    ):
 
         message += (
             f"\nКоротко: "
             f"{event['summary']}\n"
         )
 
-    if age_text:
+    if age:
 
         message += (
             f"\n🕒 "
-            f"{age_text}"
+            f"{age}"
         )
 
-    message += (
-        f"\n{sources_text}"
-    )
+    # Считаем именно разные редакции,
+    # а не количество RSS.
+    if (
+        len(
+            publishers
+        )
+        ==
+        1
+    ):
+
+        message += (
+            f"\n🗞 Источник: "
+            f"{publishers[0]}"
+        )
+
+    elif publishers:
+
+        message += (
+            f"\n🗞 Источников: "
+            f"{len(publishers)} — "
+            +
+            " • ".join(
+                publishers
+            )
+        )
+
+    else:
+
+        message += (
+            "\n🗞 Источник не указан"
+        )
 
     return message
 
+
+# =========================================================
+# ОТПРАВКА КАРТОЧЕК
+# =========================================================
 
 async def send_events(
     update,
     context,
     events,
-    with_images=False,
+    with_images=False
 ):
 
     for event in events:
@@ -2202,13 +2953,19 @@ async def send_events(
             if image_url:
 
                 caption = (
+
                     message
 
-                    if len(message)
-                    <=
-                    1000
+                    if (
+                        len(
+                            message
+                        )
+                        <=
+                        1000
+                    )
 
                     else
+
                     message[
                         :997
                     ]
@@ -2241,7 +2998,8 @@ async def send_events(
         await update.message.reply_text(
             message,
 
-            disable_web_page_preview=True,
+            disable_web_page_preview=
+                True,
 
             reply_markup=
                 keyboard,
@@ -2249,32 +3007,49 @@ async def send_events(
 
 
 # =========================================================
-# ПОДРОБНЕЕ / ПОЧЕМУ ВАЖНО
+# ПОДРОБНЕЕ
 # =========================================================
 
 def make_details_prompt(
     event
 ):
 
+    publishers = ", ".join(
+        unique_publishers(
+            event.get(
+                "sources",
+                [],
+            )
+        )
+    )
+
     return (
         f"Заголовок: "
         f"{event['title']}\n"
 
         f"Описание: "
-        f"{event['summary']}\n\n"
+        f"{event['summary']}\n"
 
-        "Объясни подробнее на русском "
-        "максимум в 5 коротких предложениях. "
+        f"Источники: "
+        f"{publishers}\n\n"
+
+        "Объясни событие подробнее "
+        "на русском максимум "
+        "в 5 коротких предложениях. "
 
         "Используй только данные карточки. "
-        "Ничего не выдумывай. "
+        "Не выдумывай новые факты. "
 
         "Сохраняй нейтральный тон. "
 
         "Если данных мало — "
-        "скажи об этом."
+        "скажи об этом прямо."
     )
 
+
+# =========================================================
+# ПОЧЕМУ ВАЖНО
+# =========================================================
 
 def make_why_prompt(
     event
@@ -2288,21 +3063,26 @@ def make_why_prompt(
         f"{event['summary']}\n\n"
 
         "Объясни нейтрально, "
-        "почему событие может иметь значение. "
+        "почему это событие "
+        "может иметь значение. "
 
         "2–4 коротких предложения. "
 
-        "Не выдумывай факты. "
-        "Не драматизируй. "
+        "Не выдумывай факты "
+        "и не драматизируй. "
 
         "Если последствия неизвестны — "
         "скажи об этом."
     )
 
 
+# =========================================================
+# INLINE-КНОПКИ
+# =========================================================
+
 async def news_callback(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
     query = (
@@ -2345,18 +3125,31 @@ async def news_callback(
 
         return
 
-    # Источники
+
+    # =====================================================
+    # ИСТОЧНИКИ
+    # =====================================================
+
     if action == "s":
 
         buttons = []
 
-        for source in event[
-            "sources"
-        ]:
+        sources = (
+            unique_source_links(
+                event.get(
+                    "sources",
+                    [],
+                )
+            )
+        )
 
-            link = source.get(
-                "link",
-                "",
+        for source in sources:
+
+            link = (
+                source.get(
+                    "link",
+                    "",
+                )
             )
 
             if link.startswith(
@@ -2371,11 +3164,13 @@ async def news_callback(
                         InlineKeyboardButton(
                             "🔗 "
                             +
-                            source[
-                                "name"
-                            ],
+                            source.get(
+                                "name",
+                                "Источник",
+                            ),
 
-                            url=link,
+                            url=
+                                link,
                         )
                     ]
                 )
@@ -2399,6 +3194,11 @@ async def news_callback(
             )
 
         return
+
+
+    # =====================================================
+    # ПОДРОБНЕЕ / ПОЧЕМУ ВАЖНО
+    # =====================================================
 
     if action == "d":
 
@@ -2446,8 +3246,10 @@ async def news_callback(
 
         await query.message.reply_text(
             title
-            + "\n\n"
-            + event[
+            +
+            "\n\n"
+            +
+            event[
                 cache_key
             ]
         )
@@ -2460,8 +3262,10 @@ async def news_callback(
         )
     )
 
-    answer = ask_ai(
-        prompt
+    answer = (
+        ask_ai(
+            prompt
+        )
     )
 
     if not answer:
@@ -2479,18 +3283,20 @@ async def news_callback(
 
     await wait_message.edit_text(
         title
-        + "\n\n"
-        + answer
+        +
+        "\n\n"
+        +
+        answer
     )
 
 
 # =========================================================
-# 💰 ФИНАНСЫ
+# ФИНАНСЫ
 # =========================================================
 
 def xml_child_text(
     item,
-    name,
+    name
 ):
 
     for child in list(
@@ -2499,7 +3305,9 @@ def xml_child_text(
 
         if (
             child.tag
-            .split("}")[-1]
+            .split(
+                "}"
+            )[-1]
             .lower()
             ==
             name.lower()
@@ -2525,8 +3333,9 @@ def to_float(
     match = re.search(
         r"-?\d+(?:[.,]\d+)?",
 
-        str(value)
-        .replace(
+        str(
+            value
+        ).replace(
             " ",
             "",
         ),
@@ -2551,6 +3360,10 @@ def to_float(
         return None
 
 
+# =========================================================
+# КУРСЫ НБК
+# =========================================================
+
 def fetch_nbk_rates():
 
     response = requests.get(
@@ -2572,6 +3385,7 @@ def fetch_nbk_rates():
     )
 
     wanted = {
+
         "USD",
         "EUR",
         "GBP",
@@ -2585,7 +3399,9 @@ def fetch_nbk_rates():
 
         if (
             item.tag
-            .split("}")[-1]
+            .split(
+                "}"
+            )[-1]
             .lower()
             !=
             "item"
@@ -2606,10 +3422,12 @@ def fetch_nbk_rates():
 
             continue
 
-        value = to_float(
-            xml_child_text(
-                item,
-                "description",
+        value = (
+            to_float(
+                xml_child_text(
+                    item,
+                    "description",
+                )
             )
         )
 
@@ -2620,7 +3438,9 @@ def fetch_nbk_rates():
                     "quant",
                 )
             )
+
             or
+
             1.0
         )
 
@@ -2628,20 +3448,23 @@ def fetch_nbk_rates():
 
             continue
 
-        if quantity <= 0:
-
-            quantity = 1.0
-
         rates[
             code
         ] = (
             value
             /
-            quantity
+            max(
+                quantity,
+                1.0,
+            )
         )
 
     return rates
 
+
+# =========================================================
+# КРИПТО
+# =========================================================
 
 def fetch_coinbase_spot(
     pair
@@ -2661,14 +3484,16 @@ def fetch_coinbase_spot(
 
     response.raise_for_status()
 
-    return to_float(
-        response.json()
-        .get(
-            "data",
-            {},
-        )
-        .get(
-            "amount"
+    return (
+        to_float(
+            response.json()
+            .get(
+                "data",
+                {},
+            )
+            .get(
+                "amount"
+            )
         )
     )
 
@@ -2700,9 +3525,13 @@ def format_usd_price(
     )
 
 
+# =========================================================
+# /MARKETS
+# =========================================================
+
 async def markets(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
     message = (
@@ -2734,12 +3563,7 @@ async def markets(
             )
         )
 
-    except Exception as error:
-
-        print(
-            "BTC error:",
-            repr(error),
-        )
+    except Exception:
 
         btc = None
 
@@ -2751,57 +3575,53 @@ async def markets(
             )
         )
 
-    except Exception as error:
-
-        print(
-            "ETH error:",
-            repr(error),
-        )
+    except Exception:
 
         eth = None
 
     lines = [
+
         "💰 Финансы",
+
         "",
+
+        "💱 Официальный курс НБК",
+    ]
+
+    currencies = [
+
+        (
+            "USD",
+            "🇺🇸",
+            "доллар",
+        ),
+
+        (
+            "EUR",
+            "🇪🇺",
+            "евро",
+        ),
+
+        (
+            "GBP",
+            "🇬🇧",
+            "фунт стерлингов",
+        ),
+
+        (
+            "CNY",
+            "🇨🇳",
+            "юань",
+        ),
+
+        (
+            "RUB",
+            "🇷🇺",
+            "рубль",
+        ),
     ]
 
     if rates:
-
-        lines.append(
-            "💱 Официальный курс НБК"
-        )
-
-        currencies = [
-            (
-                "USD",
-                "🇺🇸",
-                "доллар",
-            ),
-
-            (
-                "EUR",
-                "🇪🇺",
-                "евро",
-            ),
-
-            (
-                "GBP",
-                "🇬🇧",
-                "фунт стерлингов",
-            ),
-
-            (
-                "CNY",
-                "🇨🇳",
-                "юань",
-            ),
-
-            (
-                "RUB",
-                "🇷🇺",
-                "рубль",
-            ),
-        ]
 
         for (
             code,
@@ -2827,22 +3647,24 @@ async def markets(
     else:
 
         lines.append(
-            "💱 Курсы НБК "
-            "сейчас недоступны"
+            "Курсы сейчас недоступны"
         )
 
     lines += [
+
         "",
 
         "🪙 Крипто",
 
         "₿ BTC/USD ≈ "
-        + format_usd_price(
+        +
+        format_usd_price(
             btc
         ),
 
         "◆ ETH/USD ≈ "
-        + format_usd_price(
+        +
+        format_usd_price(
             eth
         ),
 
@@ -2866,43 +3688,150 @@ async def markets(
 
 
 # =========================================================
-# НОВОСТИ
+# ПРОВЕРКА: СПОРТИВНОЕ СОБЫТИЕ?
+# =========================================================
+
+def is_sport_event(
+    event
+):
+
+    return (
+        event.get(
+            "region"
+        )
+        in
+        SPORT_LABELS
+    )
+
+
+# =========================================================
+# ФИЛЬТР СОБЫТИЙ
+# =========================================================
+
+def filter_events(
+    events,
+    region_filter=None,
+    sport_filter=None
+):
+
+    # Например только футбол.
+    if sport_filter:
+
+        return [
+
+            event
+
+            for event in events
+
+            if (
+                event.get(
+                    "region"
+                )
+                ==
+                sport_filter
+            )
+        ]
+
+    # Весь спорт:
+    # футбол + F1 + баскетбол + теннис + другой спорт.
+    if (
+        region_filter
+        ==
+        "🏆 Спорт"
+    ):
+
+        return [
+
+            event
+
+            for event in events
+
+            if (
+                is_sport_event(
+                    event
+                )
+            )
+        ]
+
+    # Обычный регион.
+    if region_filter:
+
+        return [
+
+            event
+
+            for event in events
+
+            if (
+                event.get(
+                    "region"
+                )
+                ==
+                region_filter
+            )
+        ]
+
+    return events
+
+
+# =========================================================
+# ЗАПРОС НОВОСТЕЙ
 # =========================================================
 
 async def run_news_request(
     update,
     context,
     region_filter=None,
-    important_only=False,
+    sport_filter=None,
+    important_only=False
 ):
 
     if important_only:
 
         status_text = (
-            "🔥 Ищу главное за последние 24 часа...\n"
-            "🌍 Собираю до 5 публикаций с каждого источника\n"
-            "🧠 Сверяю события между СМИ\n"
-            "🖼 Ищу фото к главным новостям"
+            "🔥 Ищу главное "
+            "за последние 24 часа...\n"
+
+            "🧠 Сравниваю значимость, "
+            "число источников и свежесть"
+        )
+
+    elif sport_filter:
+
+        status_text = (
+            f"🔎 Собираю "
+            f"{sport_filter} "
+            f"за последние "
+            f"{FRESH_HOURS} часов..."
+        )
+
+    elif (
+        region_filter
+        ==
+        "🏆 Спорт"
+    ):
+
+        status_text = (
+            "🏆 Собираю спорт...\n"
+
+            "🧠 Выбираю значимые события, "
+            "а не первые строки RSS"
         )
 
     elif region_filter:
 
         status_text = (
             f"🔎 Собираю свежие новости: "
-            f"{region_filter}\n"
-
-            f"🕒 Только последние "
-            f"{FRESH_HOURS} часов"
+            f"{region_filter}"
         )
 
     else:
 
         status_text = (
-            "🔎 Собираю новости "
-            "за последние 24 часа...\n"
+            "🔎 Собираю свежие новости...\n"
 
-            "🕒 Сортирую "
-            "от новых к старым"
+            "🧠 Ранжирую по значимости, "
+            "источникам и свежести"
         )
 
     status = (
@@ -2911,29 +3840,42 @@ async def run_news_request(
         )
     )
 
+    # Если выбран футбол / F1 /
+    # баскетбол / теннис,
+    # сначала собираем ВСЕ спортивные RSS.
+    if sport_filter:
+
+        source_region = (
+            "🏆 Спорт"
+        )
+
+    else:
+
+        source_region = (
+            region_filter
+        )
+
     articles = (
         collect_articles(
-            region_filter
+            source_region
         )
     )
 
     if not articles:
 
         await status.edit_text(
-            f"❌ Не нашёл публикаций "
-            f"с подтверждённым временем "
+            f"❌ Не нашёл свежих публикаций "
             f"за последние "
             f"{FRESH_HOURS} часов."
         )
 
         return
 
+    # Выбираем качественный,
+    # сбалансированный набор для AI.
     ai_articles = (
         select_articles_for_ai(
-            articles,
-
-            region_filter=
-                region_filter,
+            articles
         )
     )
 
@@ -2977,89 +3919,102 @@ async def run_news_request(
         )
     )
 
-    # Если выбрали регион,
-    # оставляем только события,
-    # которые AI реально отнёс к нему.
-    if (
-        region_filter
-        and
-        not ai_failed
-    ):
+    # Если AI работает —
+    # фильтруем уже по реальной
+    # категории события.
+    if not ai_failed:
 
-        events = [
-            event
+        events = (
+            filter_events(
+                events,
 
-            for event in events
+                region_filter=
+                    region_filter,
 
-            if (
-                event["region"]
-                ==
-                region_filter
+                sport_filter=
+                    sport_filter,
             )
-        ]
+        )
+
+    # =====================================================
+    # ГЛАВНЫЕ НОВОСТИ
+    # =====================================================
 
     if important_only:
 
         events = [
+
             event
 
             for event in events
 
             if (
-                event["impact"]
+                event.get(
+                    "impact"
+                )
                 ==
                 "HIGH"
             )
         ]
 
-        # Сначала события,
-        # про которые пишут несколько источников,
-        # затем самые свежие.
-        events.sort(
-            key=lambda event: (
-                len(
-                    unique_sources(
-                        event[
-                            "sources"
-                        ]
-                    )
-                ),
-
-                event.get(
-                    "published_ts",
-                    0,
-                ),
-            ),
-
-            reverse=True,
-        )
-
         events = (
-            events[:5]
+            rank_events(
+                events
+            )[
+                :5
+            ]
         )
+
+    # =====================================================
+    # ОБЫЧНАЯ ВЫДАЧА
+    # =====================================================
 
     else:
 
-        # В обычной ленте —
-        # строго от новых к старым.
-        events.sort(
-            key=lambda event:
-                event.get(
-                    "published_ts",
-                    0,
-                ),
-
-            reverse=True,
+        # Главное изменение:
+        #
+        # НЕ порядок RSS.
+        #
+        # Сначала важность,
+        # потом количество разных СМИ,
+        # потом свежесть.
+        events = (
+            rank_events(
+                events
+            )
         )
 
-        events = events[
-            :(
-                MAX_REGION_EVENTS
-                if region_filter
-                else
-                MAX_NEWS_EVENTS
+        if (
+            sport_filter
+
+            or
+
+            region_filter
+            ==
+            "🏆 Спорт"
+        ):
+
+            events = (
+                events[
+                    :MAX_SPORT_EVENTS
+                ]
             )
-        ]
+
+        elif region_filter:
+
+            events = (
+                events[
+                    :MAX_REGION_EVENTS
+                ]
+            )
+
+        else:
+
+            events = (
+                events[
+                    :MAX_NEWS_EVENTS
+                ]
+            )
 
     try:
 
@@ -3085,7 +4040,7 @@ async def run_news_request(
             "не ответили.\n"
 
             "Показываю свежие RSS "
-            "без AI-анализа."
+            "без AI-ранжирования."
         )
 
     await send_events(
@@ -3093,19 +4048,20 @@ async def run_news_request(
         context,
         events,
 
-        # Картинки только у Главного.
+        # Картинки пока только
+        # в «Главном».
         with_images=
             important_only,
     )
 
 
 # =========================================================
-# КРАТКАЯ СВОДКА
+# КРАТКО
 # =========================================================
 
 async def brief(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
     status = (
@@ -3122,10 +4078,8 @@ async def brief(
     if not articles:
 
         await status.edit_text(
-            f"❌ Не нашёл публикаций "
-            f"с подтверждённым временем "
-            f"за последние "
-            f"{FRESH_HOURS} часов."
+            "❌ Не нашёл свежих публикаций "
+            "за последние 24 часа."
         )
 
         return
@@ -3164,32 +4118,12 @@ async def brief(
         )
     )
 
-    # Для brief:
-    # важность -> количество СМИ -> свежесть.
-    events.sort(
-        key=lambda event: (
-            IMPACT_RANK.get(
-                event[
-                    "impact"
-                ],
-                0,
-            ),
-
-            len(
-                unique_sources(
-                    event[
-                        "sources"
-                    ]
-                )
-            ),
-
-            event.get(
-                "published_ts",
-                0,
-            ),
-        ),
-
-        reverse=True,
+    events = (
+        rank_events(
+            events
+        )[
+            :5
+        ]
     )
 
     try:
@@ -3200,46 +4134,61 @@ async def brief(
 
         pass
 
-    top_events = (
-        events[:5]
-    )
+    lines = [
 
-    text = (
         "⚡ Коротко: "
-        "5 событий за последние 24 часа\n\n"
-        +
-        "\n\n".join(
-            f"{number}. "
-            f"{event['region']} "
-            f"{event['title']}"
+        "5 важных событий "
+        "за последние 24 часа"
+    ]
 
-            for number, event
-            in enumerate(
-                top_events,
-                1,
+    for (
+        number,
+        event,
+    ) in enumerate(
+        events,
+        1,
+    ):
+
+        sources_count = (
+            len(
+                unique_publishers(
+                    event.get(
+                        "sources",
+                        [],
+                    )
+                )
             )
         )
-    )
+
+        lines.append(
+            f"{number}. "
+            f"{event['region']} "
+            f"{event['title']} "
+            f"· {sources_count} ист."
+        )
 
     await update.message.reply_text(
-        text
+        "\n\n".join(
+            lines
+        )
     )
 
 
 # =========================================================
-# ОСНОВНЫЕ КОМАНДЫ
+# START
 # =========================================================
 
 async def start(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
     await update.message.reply_text(
         "👋 Привет!\n\n"
 
         "Я собираю свежие новости "
-        "из разных источников, "
+        "из нескольких редакций, "
+        "сравниваю публикации, "
         "перевожу их на русский "
         "и объединяю одинаковые события.\n\n"
 
@@ -3250,9 +4199,13 @@ async def start(
     )
 
 
+# =========================================================
+# ГЛАВНОЕ МЕНЮ
+# =========================================================
+
 async def menu(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
     await update.message.reply_text(
@@ -3263,9 +4216,30 @@ async def menu(
     )
 
 
+# =========================================================
+# МЕНЮ СПОРТА
+# =========================================================
+
+async def sport_menu(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    await update.message.reply_text(
+        "🏆 Что смотрим?",
+
+        reply_markup=
+            SPORT_MENU,
+    )
+
+
+# =========================================================
+# ВСЕ НОВОСТИ
+# =========================================================
+
 async def news(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
     await run_news_request(
@@ -3273,75 +4247,32 @@ async def news(
         context,
     )
 
+
+# =========================================================
+# ГЛАВНОЕ
+# =========================================================
 
 async def important(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
     await run_news_request(
         update,
         context,
 
-        important_only=True,
+        important_only=
+            True,
     )
 
 
 # =========================================================
-# СКРЫТЫЕ КОМАНДЫ
+# РЕГИОНАЛЬНЫЕ КОМАНДЫ
 # =========================================================
-
-async def manutd(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    await update.message.reply_text(
-        "Муха лох.\n"
-        "Слабый везде 🤣"
-    )
-
-
-async def zarina(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    # Один и тот же комплимент
-    # в течение суток по времени Алматы.
-    today = (
-        datetime.now(
-            ALMATY_TZ
-        )
-        .date()
-    )
-
-    index = (
-        today.toordinal()
-        %
-        len(
-            COMPLIMENTS
-        )
-    )
-
-    compliment = (
-        COMPLIMENTS[
-            index
-        ]
-    )
-
-    await update.message.reply_text(
-        "💗 Комплимент дня для Зарины\n\n"
-        + compliment
-        + "\n\n"
-        + "✨ Возвращайся завтра "
-        + "за новым 😄"
-    )
-
 
 async def region_command(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
     command = (
@@ -3370,13 +4301,121 @@ async def region_command(
 
 
 # =========================================================
-# STATUS
+# КОМАНДЫ СПОРТА
+# =========================================================
+
+async def sport_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    command = (
+        update.message.text
+        .split()[0]
+        .split("@")[0]
+        .lstrip("/")
+        .lower()
+    )
+
+    sport_filter = (
+        SPORT_COMMANDS.get(
+            command
+        )
+    )
+
+    if sport_filter:
+
+        await run_news_request(
+            update,
+            context,
+
+            sport_filter=
+                sport_filter,
+        )
+
+
+# =========================================================
+# ВЕСЬ СПОРТ
+# =========================================================
+
+async def all_sport(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    await run_news_request(
+        update,
+        context,
+
+        region_filter=
+            "🏆 Спорт",
+    )
+
+
+# =========================================================
+# СКРЫТАЯ /MANUTD
+# =========================================================
+
+async def manutd(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    await update.message.reply_text(
+        "Муха лох.\n"
+        "Слабый везде 🤣"
+    )
+
+
+# =========================================================
+# СКРЫТАЯ /ZARINA
+# =========================================================
+
+async def zarina(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    today = (
+        datetime.now(
+            ALMATY_TZ
+        )
+        .date()
+    )
+
+    compliment = (
+
+        COMPLIMENTS[
+            today.toordinal()
+            %
+            len(
+                COMPLIMENTS
+            )
+        ]
+    )
+
+    await update.message.reply_text(
+        "💗 Комплимент дня для Зарины\n\n"
+
+        +
+        compliment
+
+        +
+        "\n\n✨ Возвращайся завтра "
+        "за новым 😄"
+    )
+
+
+# =========================================================
+# STATUS GROQ
 # =========================================================
 
 def test_groq_connection():
 
-    api_key = os.environ.get(
-        "GROQ_API_KEY"
+    api_key = (
+        os.environ.get(
+            "GROQ_API_KEY"
+        )
     )
 
     if not api_key:
@@ -3408,11 +4447,13 @@ def test_groq_connection():
 
             return (
                 False,
+
                 f"HTTP "
                 f"{response.status_code}",
             )
 
         models = {
+
             item.get(
                 "id"
             )
@@ -3446,10 +4487,16 @@ def test_groq_connection():
         )
 
 
+# =========================================================
+# STATUS GEMINI
+# =========================================================
+
 def test_gemini_connection():
 
-    api_key = os.environ.get(
-        "GEMINI_API_KEY"
+    api_key = (
+        os.environ.get(
+            "GEMINI_API_KEY"
+        )
     )
 
     if not api_key:
@@ -3481,15 +4528,18 @@ def test_gemini_connection():
 
             return (
                 False,
+
                 f"HTTP "
                 f"{response.status_code}",
             )
 
         models = {
+
             item.get(
                 "name",
                 "",
-            ).replace(
+            )
+            .replace(
                 "models/",
                 "",
             )
@@ -3523,9 +4573,13 @@ def test_gemini_connection():
         )
 
 
+# =========================================================
+# /STATUS
+# =========================================================
+
 async def status(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
     message = (
@@ -3556,18 +4610,23 @@ async def status(
 
 
 # =========================================================
-# КНОПКИ МЕНЮ
+# ОБРАБОТКА КНОПОК
 # =========================================================
 
 async def menu_buttons(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
     text = (
         update.message.text
         .strip()
     )
+
+
+    # -------------------------
+    # ГЛАВНОЕ
+    # -------------------------
 
     if text == "🔥 Главное":
 
@@ -3576,12 +4635,22 @@ async def menu_buttons(
             context,
         )
 
+
+    # -------------------------
+    # КРАТКО
+    # -------------------------
+
     if text == "⚡ Кратко":
 
         return await brief(
             update,
             context,
         )
+
+
+    # -------------------------
+    # ВСЕ НОВОСТИ
+    # -------------------------
 
     if text == "📰 Все новости":
 
@@ -3590,6 +4659,11 @@ async def menu_buttons(
             context,
         )
 
+
+    # -------------------------
+    # ФИНАНСЫ
+    # -------------------------
+
     if text == "💰 Финансы":
 
         return await markets(
@@ -3597,21 +4671,66 @@ async def menu_buttons(
             context,
         )
 
-    region = (
-        BUTTON_TO_REGION.get(
-            text
-        )
-    )
 
-    if region:
+    # =====================================================
+    # СПОРТ
+    # =====================================================
+
+    if text == "🏆 Спорт":
+
+        return await sport_menu(
+            update,
+            context,
+        )
+
+
+    if text == "🏆 Весь спорт":
+
+        return await all_sport(
+            update,
+            context,
+        )
+
+
+    if text in SPORT_FILTERS:
+
+        return await run_news_request(
+            update,
+            context,
+
+            sport_filter=
+                SPORT_FILTERS[
+                    text
+                ],
+        )
+
+
+    # -------------------------
+    # НАЗАД
+    # -------------------------
+
+    if text == "⬅️ Главное меню":
+
+        return await menu(
+            update,
+            context,
+        )
+
+
+    # =====================================================
+    # ОБЫЧНЫЕ РЕГИОНЫ
+    # =====================================================
+
+    if text in REGION_BUTTONS:
 
         return await run_news_request(
             update,
             context,
 
             region_filter=
-                region,
+                text,
         )
+
 
     await update.message.reply_text(
         "Выбери раздел "
@@ -3623,16 +4742,17 @@ async def menu_buttons(
 
 
 # =========================================================
-# ВИДИМЫЕ КОМАНДЫ TELEGRAM
+# TELEGRAM COMMAND MENU
 # =========================================================
 
 async def post_init(
-    application: Application,
+    application: Application
 ):
 
-    # ВАЖНО:
-    # /zarina и /manutd здесь специально НЕТ.
-    # Поэтому они остаются скрытыми.
+    # /zarina и /manutd
+    # здесь специально НЕТ.
+    # Они скрытые.
+
     await application.bot.set_my_commands(
         [
             BotCommand(
@@ -3653,6 +4773,31 @@ async def post_init(
             BotCommand(
                 "markets",
                 "Финансы",
+            ),
+
+            BotCommand(
+                "sport",
+                "Весь спорт",
+            ),
+
+            BotCommand(
+                "football",
+                "Футбол",
+            ),
+
+            BotCommand(
+                "f1",
+                "Formula 1",
+            ),
+
+            BotCommand(
+                "basketball",
+                "Баскетбол",
+            ),
+
+            BotCommand(
+                "tennis",
+                "Теннис",
             ),
 
             BotCommand(
@@ -3717,6 +4862,7 @@ def main():
     ).start()
 
     app = (
+
         Application.builder()
 
         .token(
@@ -3732,7 +4878,13 @@ def main():
         .build()
     )
 
+
+    # =====================================================
+    # ОСНОВНЫЕ КОМАНДЫ
+    # =====================================================
+
     handlers = [
+
         (
             "start",
             start,
@@ -3764,11 +4916,20 @@ def main():
         ),
 
         (
+            "sport",
+            all_sport,
+        ),
+
+        (
             "status",
             status,
         ),
 
-        # Скрытые
+
+        # -------------------------
+        # СКРЫТЫЕ
+        # -------------------------
+
         (
             "manutd",
             manutd,
@@ -3779,6 +4940,7 @@ def main():
             zarina,
         ),
     ]
+
 
     for (
         command,
@@ -3792,6 +4954,11 @@ def main():
             )
         )
 
+
+    # =====================================================
+    # РЕГИОНЫ
+    # =====================================================
+
     for command in (
         COMMAND_TO_REGION
     ):
@@ -3803,11 +4970,37 @@ def main():
             )
         )
 
+
+    # =====================================================
+    # СПОРТИВНЫЕ КОМАНДЫ
+    # =====================================================
+
+    for command in (
+        SPORT_COMMANDS
+    ):
+
+        app.add_handler(
+            CommandHandler(
+                command,
+                sport_command,
+            )
+        )
+
+
+    # =====================================================
+    # INLINE-КНОПКИ
+    # =====================================================
+
     app.add_handler(
         CallbackQueryHandler(
             news_callback
         )
     )
+
+
+    # =====================================================
+    # ОБЫЧНЫЕ КНОПКИ
+    # =====================================================
 
     app.add_handler(
         MessageHandler(
@@ -3818,6 +5011,7 @@ def main():
             menu_buttons,
         )
     )
+
 
     print(
         "Telegram bot started"
