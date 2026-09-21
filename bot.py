@@ -49,16 +49,23 @@ def translate_titles(titles):
         f"models/{GEMINI_MODEL}:generateContent"
     )
 
-    prompt = (
-        "Переведи каждый заголовок новости на естественный русский язык.\n"
-        "Правила:\n"
-        "- ничего не добавляй от себя;\n"
-        "- не сокращай важные факты;\n"
-        "- точно сохраняй имена, страны, даты и числа;\n"
-        "- верни переводы строго в исходном порядке.\n\n"
-        "Заголовки:\n"
-        + json.dumps(titles, ensure_ascii=False)
-    )
+    prompt = f"""
+Ты переводчик новостных заголовков.
+
+Переведи ВСЕ заголовки ниже на естественный русский язык.
+
+Правила:
+- ничего не добавляй от себя;
+- не меняй факты;
+- точно сохраняй имена, страны, даты и числа;
+- переведи также китайские заголовки;
+- количество переводов должно точно совпадать с количеством исходных заголовков;
+- верни ТОЛЬКО JSON-массив строк;
+- никакого пояснения и никаких ```.
+
+Исходные заголовки:
+{json.dumps(titles, ensure_ascii=False)}
+"""
 
     try:
         response = requests.post(
@@ -74,22 +81,7 @@ def translate_titles(titles):
                             {"text": prompt}
                         ]
                     }
-                ],
-                "generationConfig": {
-                    "responseFormat": {
-                        "text": {
-                            "mimeType": "application/json",
-                            "schema": {
-                                "type": "array",
-                                "items": {
-                                    "type": "string"
-                                },
-                                "minItems": len(titles),
-                                "maxItems": len(titles)
-                            }
-                        }
-                    }
-                }
+                ]
             },
             timeout=40,
         )
@@ -107,17 +99,25 @@ def translate_titles(titles):
         raw_text = (
             data["candidates"][0]
             ["content"]["parts"][0]["text"]
+            .strip()
         )
+
+        # На случай, если Gemini всё же добавит markdown-блок
+        if raw_text.startswith("```"):
+            raw_text = raw_text.replace("```json", "")
+            raw_text = raw_text.replace("```", "")
+            raw_text = raw_text.strip()
 
         translated = json.loads(raw_text)
 
         if (
             isinstance(translated, list)
             and len(translated) == len(titles)
+            and all(isinstance(x, str) for x in translated)
         ):
             return translated
 
-        print("Gemini returned unexpected result:", raw_text)
+        print("Unexpected Gemini response:", raw_text)
         return None
 
     except Exception as e:
