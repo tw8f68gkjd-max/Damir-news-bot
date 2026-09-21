@@ -2,18 +2,28 @@ import os
 import re
 import html
 import time
+import uuid
 import threading
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import feedparser
 import requests
-from telegram import Update, ReplyKeyboardMarkup, BotCommand
+
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    BotCommand,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
+
 from telegram.ext import (
     Application,
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
 )
 
@@ -31,6 +41,7 @@ GEMINI_MODEL = "gemini-3.8-flash"
 # =========================================================
 
 NEWS_FEEDS = [
+
     # 🇰🇿 КАЗАХСТАН
     {
         "region": "🇰🇿 Казахстан",
@@ -123,7 +134,8 @@ NEWS_FEEDS = [
 
 MAIN_MENU = ReplyKeyboardMarkup(
     [
-        ["🔥 Главное", "📰 Все новости"],
+        ["🔥 Главное", "⚡ Кратко"],
+        ["📰 Все новости"],
         ["🇰🇿 Казахстан", "🇺🇸 США"],
         ["🇪🇺 Европа", "🇨🇳 Китай"],
         ["🇷🇺 Россия", "🌍 Мир"],
@@ -237,7 +249,7 @@ def clean_text(text):
 
 
 # =========================================================
-# ПОЛУЧЕНИЕ RSS
+# RSS
 # =========================================================
 
 def collect_articles(
@@ -262,7 +274,7 @@ def collect_articles(
                 feed_info["url"],
                 headers={
                     "User-Agent":
-                    "Mozilla/5.0 NewsBot/1.0"
+                        "Mozilla/5.0 NewsBot/1.0"
                 },
                 timeout=15,
             )
@@ -274,12 +286,6 @@ def collect_articles(
             )
 
             if not feed.entries:
-
-                print(
-                    "No articles from:",
-                    feed_info["source"],
-                )
-
                 continue
 
             article = feed.entries[0]
@@ -338,7 +344,7 @@ def collect_articles(
 
 
 # =========================================================
-# PROMPT ДЛЯ AI
+# PROMPT ДЛЯ ОБРАБОТКИ НОВОСТЕЙ
 # =========================================================
 
 def make_ai_prompt(articles):
@@ -373,76 +379,62 @@ DESCRIPTION: {description}
     return f"""
 Ты редактор русскоязычного новостного агрегатора.
 
-Обработай КАЖДУЮ публикацию ниже.
+Обработай КАЖДУЮ публикацию.
 
 Для каждого NEWS_:
 
 1. Переведи заголовок на естественный русский язык.
 
-2. Напиши краткое описание события на русском:
+2. Напиши краткое описание:
 максимум 1–2 предложения.
 
 3. Используй только TITLE и DESCRIPTION.
 Ничего не выдумывай.
 
-4. Точно сохраняй:
-имена людей,
-компании,
-страны,
-даты,
-суммы,
-проценты
-и другие числа.
+4. Точно сохраняй имена, страны,
+компании, даты, суммы, проценты и числа.
 
 5. Если несколько публикаций описывают
 одно и то же КОНКРЕТНОЕ событие,
-присвой им одинаковый EVENT_ID.
+дай им одинаковый EVENT_ID.
 
-6. Если тема похожа,
-но события разные,
+6. Если события разные —
 EVENT_ID должен быть разным.
 
 7. Если сомневаешься —
-НЕ объединяй.
+не объединяй.
 
-8. Оцени масштаб события:
+8. Определи масштаб:
 
 HIGH =
-крупное событие с широким национальным
-или международным значением,
-серьёзной угрозой безопасности,
-существенным экономическим эффектом
-или важным решением государственных
-или международных институтов.
+крупное событие национального
+или международного значения,
+важное решение,
+серьёзный экономический эффект
+или значимая угроза безопасности.
 
 MEDIUM =
-заметное событие более ограниченного масштаба.
+заметное событие ограниченного масштаба.
 
 LOW =
-локальная,
-узкая
-или нишевая новость.
+локальная или нишевая новость.
 
-9. Не повышай важность
-из-за эмоционального заголовка,
-политической позиции
-или мнения СМИ.
+Не повышай важность из-за
+эмоционального заголовка
+или политической позиции источника.
 
-10. Не представляй заявление,
-обвинение,
-предположение
-или прогноз
-как установленный факт.
+Не представляй заявление,
+обвинение, предположение
+или прогноз как установленный факт.
 
-Верни РОВНО одну строку
+Верни ровно одну строку
 для каждого NEWS_.
 
-Формат строго:
+Формат:
 
 NEWS_0|||EVENT_1|||HIGH|||РУССКИЙ ЗАГОЛОВОК|||КРАТКОЕ ОПИСАНИЕ
 
 Допустимые уровни:
-
 HIGH
 MEDIUM
 LOW
@@ -450,7 +442,6 @@ LOW
 Не используй Markdown.
 Не используй JSON.
 Не пиши пояснений.
-Не пропускай NEWS_.
 
 Публикации:
 
@@ -459,7 +450,7 @@ LOW
 
 
 # =========================================================
-# GROQ — ОСНОВНОЙ AI
+# GROQ
 # =========================================================
 
 def call_groq(prompt):
@@ -469,11 +460,6 @@ def call_groq(prompt):
     )
 
     if not api_key:
-
-        print(
-            "GROQ_API_KEY missing"
-        )
-
         return None
 
     url = (
@@ -481,7 +467,6 @@ def call_groq(prompt):
         "openai/v1/chat/completions"
     )
 
-    # Две попытки
     for attempt in range(2):
 
         try:
@@ -501,8 +486,6 @@ def call_groq(prompt):
                     "model":
                         GROQ_MODEL,
 
-                    # Для GPT-OSS инструкции
-                    # кладём прямо в user message.
                     "messages": [
                         {
                             "role": "user",
@@ -516,14 +499,9 @@ def call_groq(prompt):
                     "max_completion_tokens":
                         5000,
 
-                    # ВАЖНО:
-                    # GPT-OSS поддерживает
-                    # low / medium / high.
                     "reasoning_effort":
                         "low",
 
-                    # Reasoning нам
-                    # в ответе не нужен.
                     "include_reasoning":
                         False,
 
@@ -547,11 +525,7 @@ def call_groq(prompt):
                     )
                 )
 
-                if (
-                    text
-                    and
-                    text.strip()
-                ):
+                if text and text.strip():
 
                     print(
                         "AI provider: GROQ"
@@ -562,11 +536,9 @@ def call_groq(prompt):
             print(
                 "Groq error:",
                 response.status_code,
-                response.text[:1200],
+                response.text[:1000],
             )
 
-            # Если лимит или временный сбой —
-            # повторяем один раз.
             if (
                 response.status_code == 429
                 or
@@ -579,8 +551,6 @@ def call_groq(prompt):
 
                 continue
 
-            # Если 400/401/403 —
-            # повторять бессмысленно.
             break
 
         except Exception as error:
@@ -608,11 +578,6 @@ def call_gemini(prompt):
     )
 
     if not api_key:
-
-        print(
-            "GEMINI_API_KEY missing"
-        )
-
         return None
 
     url = (
@@ -621,7 +586,6 @@ def call_gemini(prompt):
         f"{GEMINI_MODEL}:generateContent"
     )
 
-    # Тоже две попытки
     for attempt in range(2):
 
         try:
@@ -685,7 +649,6 @@ def call_gemini(prompt):
                     )
 
                     text = "\n".join(
-
                         part.get(
                             "text",
                             ""
@@ -702,8 +665,7 @@ def call_gemini(prompt):
                     if text:
 
                         print(
-                            "AI provider: "
-                            "GEMINI FALLBACK"
+                            "AI provider: GEMINI FALLBACK"
                         )
 
                         return text
@@ -711,7 +673,7 @@ def call_gemini(prompt):
             print(
                 "Gemini error:",
                 response.status_code,
-                response.text[:1200],
+                response.text[:1000],
             )
 
             if (
@@ -743,7 +705,28 @@ def call_gemini(prompt):
 
 
 # =========================================================
-# РАЗБОР ОТВЕТА AI
+# ЛЮБОЙ AI-ЗАПРОС:
+# GROQ -> GEMINI
+# =========================================================
+
+def ask_ai(prompt):
+
+    answer = call_groq(
+        prompt
+    )
+
+    if answer:
+        return answer
+
+    answer = call_gemini(
+        prompt
+    )
+
+    return answer
+
+
+# =========================================================
+# РАЗБОР НОВОСТНОГО ОТВЕТА AI
 # =========================================================
 
 def parse_ai_response(
@@ -789,7 +772,6 @@ def parse_ai_response(
             )
 
         except ValueError:
-
             continue
 
         if not (
@@ -822,7 +804,7 @@ def parse_ai_response(
 
 
 # =========================================================
-# GROQ -> GEMINI
+# AI ОБРАБОТКА НОВОСТЕЙ
 # =========================================================
 
 def process_articles_with_ai(
@@ -833,7 +815,6 @@ def process_articles_with_ai(
         articles
     )
 
-    # 1. Сначала Groq
     groq_text = call_groq(
         prompt
     )
@@ -843,27 +824,14 @@ def process_articles_with_ai(
         len(articles),
     )
 
-    # Если обработал всё —
-    # Gemini вообще не вызываем.
     if (
         len(groq_result)
         ==
         len(articles)
     ):
-
         return groq_result
 
-    if groq_text:
 
-        print(
-            "Groq partial:",
-            len(groq_result),
-            "/",
-            len(articles),
-        )
-
-    # 2. Если Groq не справился полностью —
-    # пробуем Gemini.
     gemini_text = call_gemini(
         prompt
     )
@@ -878,11 +846,9 @@ def process_articles_with_ai(
         ==
         len(articles)
     ):
-
         return gemini_result
 
-    # Если оба дали часть результата,
-    # объединяем их.
+
     merged = dict(
         groq_result
     )
@@ -892,8 +858,8 @@ def process_articles_with_ai(
     ):
 
         if index not in merged:
-
             merged[index] = item
+
 
     if merged:
         return merged
@@ -902,7 +868,7 @@ def process_articles_with_ai(
 
 
 # =========================================================
-# РЕЗЕРВ БЕЗ AI
+# FALLBACK
 # =========================================================
 
 def fallback_processed(
@@ -940,7 +906,7 @@ def fallback_processed(
 
 
 # =========================================================
-# ОБЪЕДИНЕНИЕ ДУБЛЕЙ
+# ГРУППИРОВКА СОБЫТИЙ
 # =========================================================
 
 def group_articles(
@@ -1016,6 +982,7 @@ def group_articles(
                     "impact"
                 ] = impact
 
+
         events[event_id][
             "sources"
         ].append({
@@ -1033,12 +1000,10 @@ def group_articles(
 
 
 # =========================================================
-# УБИРАЕМ ПОВТОРНЫЕ ССЫЛКИ
+# УНИКАЛЬНЫЕ ИСТОЧНИКИ
 # =========================================================
 
-def unique_sources(
-    sources
-):
+def unique_sources(sources):
 
     result = []
     seen = set()
@@ -1050,6 +1015,7 @@ def unique_sources(
                 "name",
                 ""
             ),
+
             source.get(
                 "link",
                 ""
@@ -1071,11 +1037,80 @@ def unique_sources(
 
 
 # =========================================================
-# ОТПРАВКА НОВОСТЕЙ
+# СОХРАНЕНИЕ КАРТОЧЕК ДЛЯ INLINE-КНОПОК
+# =========================================================
+
+def save_event_card(
+    application,
+    event
+):
+
+    event_id = uuid.uuid4().hex[:12]
+
+    cards = application.bot_data.setdefault(
+        "event_cards",
+        {}
+    )
+
+    cards[event_id] = event
+
+
+    # Чтобы память не росла бесконечно
+    while len(cards) > 300:
+
+        oldest_key = next(
+            iter(cards)
+        )
+
+        cards.pop(
+            oldest_key,
+            None
+        )
+
+    return event_id
+
+
+# =========================================================
+# КНОПКИ ПОД НОВОСТЬЮ
+# =========================================================
+
+def make_news_keyboard(
+    event_id
+):
+
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "📖 Подробнее",
+                    callback_data=
+                        f"d:{event_id}",
+                ),
+
+                InlineKeyboardButton(
+                    "💡 Почему важно?",
+                    callback_data=
+                        f"w:{event_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "🗞 Источники",
+                    callback_data=
+                        f"s:{event_id}",
+                ),
+            ],
+        ]
+    )
+
+
+# =========================================================
+# ОТПРАВКА СОБЫТИЙ
 # =========================================================
 
 async def send_events(
     update,
+    context,
     events
 ):
 
@@ -1084,6 +1119,8 @@ async def send_events(
         sources = unique_sources(
             event["sources"]
         )
+
+        event["sources"] = sources
 
         source_names = []
 
@@ -1097,6 +1134,7 @@ async def send_events(
                 source_names.append(
                     source["name"]
                 )
+
 
         if len(source_names) == 1:
 
@@ -1115,10 +1153,12 @@ async def send_events(
                 )
             )
 
+
         message = (
             f"{event['region']}\n\n"
             f"📰 {event['title']}\n"
         )
+
 
         if event["summary"]:
 
@@ -1127,23 +1167,27 @@ async def send_events(
                 f"{event['summary']}\n"
             )
 
+
         message += (
-            f"\n{sources_text}\n"
+            f"\n{sources_text}"
         )
 
-        for source in sources:
 
-            message += (
-                f"\n🔗 "
-                f"{source['name']}: "
-                f"{source['link']}"
-            )
+        card_id = save_event_card(
+            context.application,
+            event
+        )
+
 
         try:
 
             await update.message.reply_text(
                 message,
                 disable_web_page_preview=True,
+                reply_markup=
+                    make_news_keyboard(
+                        card_id
+                    ),
             )
 
         except Exception as error:
@@ -1155,11 +1199,314 @@ async def send_events(
 
 
 # =========================================================
-# ОСНОВНАЯ ЛОГИКА
+# INLINE: ПОДРОБНЕЕ
+# =========================================================
+
+def make_details_prompt(event):
+
+    sources = ", ".join(
+        source["name"]
+        for source in event["sources"]
+    )
+
+    return f"""
+Ты объясняешь новостное событие пользователю.
+
+Заголовок:
+{event['title']}
+
+Краткое описание:
+{event['summary']}
+
+Источники:
+{sources}
+
+Напиши более подробное объяснение
+на русском языке.
+
+Правила:
+
+- максимум 5 коротких предложений;
+- используй только информацию,
+которая уже содержится в карточке;
+- не выдумывай новые факты;
+- сохраняй нейтральный тон;
+- если данных мало, прямо скажи,
+что подробностей пока недостаточно;
+- заявления и обвинения
+не представляй как доказанный факт;
+- не советуй пользователю,
+какую политическую позицию занимать.
+
+Ответь только текстом.
+""".strip()
+
+
+# =========================================================
+# INLINE: ПОЧЕМУ ВАЖНО
+# =========================================================
+
+def make_why_prompt(event):
+
+    return f"""
+Объясни нейтрально,
+почему это новостное событие
+может иметь значение.
+
+Заголовок:
+{event['title']}
+
+Описание:
+{event['summary']}
+
+Уровень масштаба:
+{event['impact']}
+
+Правила:
+
+- 2–4 коротких предложения;
+- не выдумывай новых фактов;
+- не драматизируй;
+- не агитируй;
+- не говори пользователю,
+что он должен думать;
+- если последствия пока неизвестны,
+прямо скажи об этом;
+- отделяй факты
+от возможных последствий.
+
+Ответь только текстом.
+""".strip()
+
+
+# =========================================================
+# ОБРАБОТКА INLINE-КНОПОК
+# =========================================================
+
+async def news_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    query = update.callback_query
+
+    await query.answer()
+
+
+    try:
+
+        action, card_id = (
+            query.data.split(
+                ":",
+                1
+            )
+        )
+
+    except Exception:
+
+        return
+
+
+    cards = (
+        context.application.bot_data
+        .get(
+            "event_cards",
+            {}
+        )
+    )
+
+
+    event = cards.get(
+        card_id
+    )
+
+
+    if not event:
+
+        await query.message.reply_text(
+            "Эта карточка уже устарела 🙂\n"
+            "Запроси новости заново."
+        )
+
+        return
+
+
+    # =====================================
+    # ПОДРОБНЕЕ
+    # =====================================
+
+    if action == "d":
+
+        cached = event.get(
+            "_details"
+        )
+
+        if cached:
+
+            await query.message.reply_text(
+                "📖 Подробнее\n\n"
+                + cached
+            )
+
+            return
+
+
+        wait_message = (
+            await query.message.reply_text(
+                "📖 Готовлю подробности..."
+            )
+        )
+
+
+        answer = ask_ai(
+            make_details_prompt(
+                event
+            )
+        )
+
+
+        if not answer:
+
+            await wait_message.edit_text(
+                "⚠️ AI сейчас временно "
+                "не смог подготовить подробности."
+            )
+
+            return
+
+
+        event["_details"] = answer
+
+
+        await wait_message.edit_text(
+            "📖 Подробнее\n\n"
+            + answer
+        )
+
+        return
+
+
+    # =====================================
+    # ПОЧЕМУ ВАЖНО
+    # =====================================
+
+    if action == "w":
+
+        cached = event.get(
+            "_why"
+        )
+
+        if cached:
+
+            await query.message.reply_text(
+                "💡 Почему это важно?\n\n"
+                + cached
+            )
+
+            return
+
+
+        wait_message = (
+            await query.message.reply_text(
+                "💡 Анализирую значение..."
+            )
+        )
+
+
+        answer = ask_ai(
+            make_why_prompt(
+                event
+            )
+        )
+
+
+        if not answer:
+
+            await wait_message.edit_text(
+                "⚠️ AI сейчас временно "
+                "не смог сделать объяснение."
+            )
+
+            return
+
+
+        event["_why"] = answer
+
+
+        await wait_message.edit_text(
+            "💡 Почему это важно?\n\n"
+            + answer
+        )
+
+        return
+
+
+    # =====================================
+    # ИСТОЧНИКИ
+    # =====================================
+
+    if action == "s":
+
+        source_buttons = []
+
+        for source in event["sources"]:
+
+            link = source.get(
+                "link",
+                ""
+            )
+
+            if not (
+                link.startswith(
+                    "http://"
+                )
+                or
+                link.startswith(
+                    "https://"
+                )
+            ):
+                continue
+
+
+            source_buttons.append(
+                [
+                    InlineKeyboardButton(
+                        "🔗 "
+                        + source["name"],
+                        url=link,
+                    )
+                ]
+            )
+
+
+        if not source_buttons:
+
+            await query.message.reply_text(
+                "Для этой новости "
+                "нет доступных ссылок."
+            )
+
+            return
+
+
+        await query.message.reply_text(
+            "🗞 Открыть источники:",
+            reply_markup=
+                InlineKeyboardMarkup(
+                    source_buttons
+                ),
+        )
+
+        return
+
+
+# =========================================================
+# ОСНОВНОЙ ЗАПРОС НОВОСТЕЙ
 # =========================================================
 
 async def run_news_request(
     update,
+    context,
     region_filter=None,
     important_only=False
 ):
@@ -1191,15 +1538,18 @@ async def run_news_request(
             "🧠 Объединяю одинаковые события"
         )
 
+
     status_message = (
         await update.message.reply_text(
             status_text
         )
     )
 
+
     articles = collect_articles(
         region_filter=region_filter
     )
+
 
     if not articles:
 
@@ -1210,14 +1560,14 @@ async def run_news_request(
 
         return
 
+
     processed = (
         process_articles_with_ai(
             articles
         )
     )
 
-    # Для /important без AI
-    # ничего не угадываем.
+
     if (
         processed is None
         and
@@ -1233,36 +1583,32 @@ async def run_news_request(
 
         return
 
+
     ai_failed = (
         processed is None
     )
 
-    # Если AI дал только часть —
-    # недостающие новости всё равно
-    # не исчезнут.
+
     processed = fallback_processed(
         articles,
         processed
     )
+
 
     events = group_articles(
         articles,
         processed,
     )
 
+
     if important_only:
 
         events = [
-
             event
-
             for event in events
-
-            if event[
-                "impact"
-            ] == "HIGH"
-
+            if event["impact"] == "HIGH"
         ][:5]
+
 
     try:
 
@@ -1270,6 +1616,7 @@ async def run_news_request(
 
     except Exception:
         pass
+
 
     if (
         important_only
@@ -1286,6 +1633,7 @@ async def run_news_request(
 
         return
 
+
     if ai_failed:
 
         await update.message.reply_text(
@@ -1294,9 +1642,123 @@ async def run_news_request(
             "Показываю обычные RSS."
         )
 
+
     await send_events(
         update,
+        context,
         events,
+    )
+
+
+# =========================================================
+# /BRIEF
+# =========================================================
+
+async def brief(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    status_message = (
+        await update.message.reply_text(
+            "⚡ Собираю короткую сводку..."
+        )
+    )
+
+
+    articles = collect_articles()
+
+
+    if not articles:
+
+        await status_message.edit_text(
+            "❌ Сейчас не удалось "
+            "получить новости."
+        )
+
+        return
+
+
+    processed = (
+        process_articles_with_ai(
+            articles
+        )
+    )
+
+
+    processed = fallback_processed(
+        articles,
+        processed
+    )
+
+
+    events = group_articles(
+        articles,
+        processed,
+    )
+
+
+    # Сначала HIGH, затем MEDIUM, затем LOW.
+    # При одинаковой важности выше событие,
+    # которое встретилось у большего числа источников.
+    events.sort(
+        key=lambda event: (
+            IMPACT_RANK.get(
+                event["impact"],
+                0
+            ),
+            len(
+                unique_sources(
+                    event["sources"]
+                )
+            ),
+        ),
+        reverse=True,
+    )
+
+
+    top_events = events[:5]
+
+
+    try:
+
+        await status_message.delete()
+
+    except Exception:
+        pass
+
+
+    if not top_events:
+
+        await update.message.reply_text(
+            "Пока нечего добавить "
+            "в краткую сводку."
+        )
+
+        return
+
+
+    lines = [
+        "⚡ Коротко: 5 событий\n"
+    ]
+
+
+    for number, event in enumerate(
+        top_events,
+        start=1
+    ):
+
+        lines.append(
+            f"{number}. "
+            f"{event['region']} "
+            f"{event['title']}"
+        )
+
+
+    await update.message.reply_text(
+        "\n\n".join(
+            lines
+        )
     )
 
 
@@ -1310,14 +1772,11 @@ async def start(
 ):
 
     await update.message.reply_text(
-
         "👋 Привет!\n\n"
-
         "Я собираю новости "
         "из разных источников, "
         "перевожу их на русский "
         "и объединяю одинаковые события.\n\n"
-
         "Выбирай раздел 👇",
 
         reply_markup=MAIN_MENU,
@@ -1349,7 +1808,8 @@ async def news(
 ):
 
     await run_news_request(
-        update
+        update,
+        context,
     )
 
 
@@ -1364,6 +1824,7 @@ async def important(
 
     await run_news_request(
         update,
+        context,
         important_only=True,
     )
 
@@ -1385,14 +1846,17 @@ async def region_command(
         .lower()
     )
 
+
     region = COMMAND_TO_REGION.get(
         command
     )
+
 
     if region:
 
         await run_news_request(
             update,
+            context,
             region_filter=region,
         )
 
@@ -1414,7 +1878,6 @@ async def manutd(
 
 # =========================================================
 # /STATUS
-# РЕАЛЬНО ПРОВЕРЯЕТ API, А НЕ ПРОСТО НАЛИЧИЕ КЛЮЧА
 # =========================================================
 
 def test_groq_connection():
@@ -1439,9 +1902,6 @@ def test_groq_connection():
             headers={
                 "Authorization":
                     f"Bearer {api_key}",
-
-                "Content-Type":
-                    "application/json",
             },
 
             timeout=15,
@@ -1455,8 +1915,8 @@ def test_groq_connection():
                 f"{response.status_code}"
             )
 
-        model_ids = {
 
+        model_ids = {
             item.get(
                 "id"
             )
@@ -1470,6 +1930,7 @@ def test_groq_connection():
             )
         }
 
+
         if GROQ_MODEL in model_ids:
 
             return (
@@ -1477,11 +1938,13 @@ def test_groq_connection():
                 "API и модель доступны"
             )
 
+
         return (
             False,
-            "ключ работает, "
+            "API работает, "
             "но модель не найдена"
         )
+
 
     except Exception:
 
@@ -1504,6 +1967,7 @@ def test_gemini_connection():
             "нет ключа"
         )
 
+
     try:
 
         response = requests.get(
@@ -1518,6 +1982,7 @@ def test_gemini_connection():
             timeout=15,
         )
 
+
         if response.status_code != 200:
 
             return (
@@ -1526,8 +1991,8 @@ def test_gemini_connection():
                 f"{response.status_code}"
             )
 
-        model_names = {
 
+        model_names = {
             item.get(
                 "name",
                 ""
@@ -1545,6 +2010,7 @@ def test_gemini_connection():
             )
         }
 
+
         if GEMINI_MODEL in model_names:
 
             return (
@@ -1552,11 +2018,13 @@ def test_gemini_connection():
                 "API и модель доступны"
             )
 
+
         return (
             False,
-            "ключ работает, "
+            "API работает, "
             "но модель не найдена"
         )
+
 
     except Exception:
 
@@ -1577,13 +2045,16 @@ async def status(
         )
     )
 
+
     groq_ok, groq_info = (
         test_groq_connection()
     )
 
+
     gemini_ok, gemini_info = (
         test_gemini_connection()
     )
+
 
     await message.edit_text(
         "🤖 Статус AI\n\n"
@@ -1599,7 +2070,7 @@ async def status(
 
 
 # =========================================================
-# КНОПКИ
+# КНОПКИ ГЛАВНОГО МЕНЮ
 # =========================================================
 
 async def menu_buttons(
@@ -1612,6 +2083,7 @@ async def menu_buttons(
         .strip()
     )
 
+
     if text == "🔥 Главное":
 
         await important(
@@ -1620,6 +2092,17 @@ async def menu_buttons(
         )
 
         return
+
+
+    if text == "⚡ Кратко":
+
+        await brief(
+            update,
+            context
+        )
+
+        return
+
 
     if text == "📰 Все новости":
 
@@ -1630,18 +2113,22 @@ async def menu_buttons(
 
         return
 
+
     region = BUTTON_TO_REGION.get(
         text
     )
+
 
     if region:
 
         await run_news_request(
             update,
+            context,
             region_filter=region,
         )
 
         return
+
 
     await update.message.reply_text(
         "Выбери раздел "
@@ -1664,6 +2151,11 @@ async def post_init(
             BotCommand(
                 "news",
                 "Все новости"
+            ),
+
+            BotCommand(
+                "brief",
+                "5 новостей коротко"
             ),
 
             BotCommand(
@@ -1730,9 +2222,11 @@ def main():
         daemon=True,
     ).start()
 
+
     telegram_token = os.environ[
         "TELEGRAM_BOT_TOKEN"
     ]
+
 
     app = (
         Application.builder()
@@ -1745,12 +2239,14 @@ def main():
         .build()
     )
 
+
     app.add_handler(
         CommandHandler(
             "start",
             start,
         )
     )
+
 
     app.add_handler(
         CommandHandler(
@@ -1759,12 +2255,22 @@ def main():
         )
     )
 
+
     app.add_handler(
         CommandHandler(
             "news",
             news,
         )
     )
+
+
+    app.add_handler(
+        CommandHandler(
+            "brief",
+            brief,
+        )
+    )
+
 
     app.add_handler(
         CommandHandler(
@@ -1773,12 +2279,14 @@ def main():
         )
     )
 
+
     app.add_handler(
         CommandHandler(
             "status",
             status,
         )
     )
+
 
     for command in COMMAND_TO_REGION:
 
@@ -1789,6 +2297,7 @@ def main():
             )
         )
 
+
     # Скрытая пасхалка 😈
     app.add_handler(
         CommandHandler(
@@ -1797,6 +2306,16 @@ def main():
         )
     )
 
+
+    # Inline-кнопки под новостями
+    app.add_handler(
+        CallbackQueryHandler(
+            news_callback
+        )
+    )
+
+
+    # Главное меню
     app.add_handler(
         MessageHandler(
             filters.TEXT
@@ -1807,9 +2326,11 @@ def main():
         )
     )
 
+
     print(
         "Telegram bot started"
     )
+
 
     app.run_polling()
 
