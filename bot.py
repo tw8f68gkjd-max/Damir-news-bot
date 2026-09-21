@@ -1,9 +1,16 @@
-import os, re, html, time, uuid, threading
+import os
+import re
+import html
+import time
+import uuid
+import threading
 import xml.etree.ElementTree as ET
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urljoin
 
-import feedparser, requests
+import feedparser
+import requests
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
@@ -37,78 +44,78 @@ NEWS_FEEDS = [
     {
         "region": "🇰🇿 Казахстан",
         "source": "Kazinform",
-        "url": "https://qazinform.com/rss/en.xml"
+        "url": "https://qazinform.com/rss/en.xml",
     },
     {
         "region": "🇰🇿 Казахстан",
         "source": "The Astana Times",
-        "url": "https://astanatimes.com/feed/"
+        "url": "https://astanatimes.com/feed/",
     },
 
     {
         "region": "🇺🇸 США",
         "source": "NPR",
-        "url": "https://feeds.npr.org/1003/rss.xml"
+        "url": "https://feeds.npr.org/1003/rss.xml",
     },
     {
         "region": "🇺🇸 США",
         "source": "BBC",
-        "url": "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml"
+        "url": "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml",
     },
 
     {
         "region": "🇪🇺 Европа",
         "source": "Euronews",
-        "url": "https://www.euronews.com/rss?format=mrss&level=vertical&name=my-europe"
+        "url": "https://www.euronews.com/rss?format=mrss&level=vertical&name=my-europe",
     },
     {
         "region": "🇪🇺 Европа",
         "source": "BBC",
-        "url": "https://feeds.bbci.co.uk/news/world/europe/rss.xml"
+        "url": "https://feeds.bbci.co.uk/news/world/europe/rss.xml",
     },
 
     {
         "region": "🇨🇳 Китай",
         "source": "China News Service",
-        "url": "https://www.chinanews.com.cn/rss/china.xml"
+        "url": "https://www.chinanews.com.cn/rss/china.xml",
     },
     {
         "region": "🇨🇳 Китай",
         "source": "BBC",
-        "url": "https://feeds.bbci.co.uk/news/world/asia/china/rss.xml"
+        "url": "https://feeds.bbci.co.uk/news/world/asia/china/rss.xml",
     },
 
     {
         "region": "🇷🇺 Россия",
         "source": "Интерфакс",
-        "url": "https://www.interfax.ru/rss.asp"
+        "url": "https://www.interfax.ru/rss.asp",
     },
     {
         "region": "🇷🇺 Россия",
         "source": "Meduza",
-        "url": "https://meduza.io/rss2/all"
+        "url": "https://meduza.io/rss2/all",
     },
 
     {
         "region": "🌍 Мир",
         "source": "Euronews",
-        "url": "https://www.euronews.com/rss?format=mrss&level=theme&name=news"
+        "url": "https://www.euronews.com/rss?format=mrss&level=theme&name=news",
     },
     {
         "region": "🌍 Мир",
         "source": "BBC",
-        "url": "https://feeds.bbci.co.uk/news/world/rss.xml"
+        "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
     },
 
     {
         "region": "🤖 AI / технологии",
         "source": "TechCrunch",
-        "url": "https://techcrunch.com/category/artificial-intelligence/feed/"
+        "url": "https://techcrunch.com/category/artificial-intelligence/feed/",
     },
     {
         "region": "🤖 AI / технологии",
         "source": "The Verge",
-        "url": "https://www.theverge.com/rss/index.xml"
+        "url": "https://www.theverge.com/rss/index.xml",
     },
 ]
 
@@ -174,6 +181,25 @@ IMPACT_RANK = {
 
 
 # =========================================================
+# ФИЛЬТР ПЛОХИХ КАРТИНОК
+# =========================================================
+
+BAD_IMAGE_WORDS = (
+    "logo",
+    "favicon",
+    "icon",
+    "avatar",
+    "sprite",
+    "badge",
+    "advert",
+    "/ads/",
+    "placeholder",
+    "default-image",
+    "1x1",
+)
+
+
+# =========================================================
 # WEB SERVER ДЛЯ RENDER
 # =========================================================
 
@@ -183,7 +209,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header(
             "Content-type",
-            "text/plain"
+            "text/plain",
         )
         self.end_headers()
 
@@ -204,13 +230,13 @@ def run_web_server():
     port = int(
         os.environ.get(
             "PORT",
-            10000
+            10000,
         )
     )
 
     server = HTTPServer(
         ("0.0.0.0", port),
-        HealthHandler
+        HealthHandler,
     )
 
     print(
@@ -236,7 +262,7 @@ def clean_text(text):
     text = re.sub(
         r"<[^>]+>",
         " ",
-        text
+        text,
     )
 
     return " ".join(
@@ -250,7 +276,7 @@ def protected_terms(text):
 
     tokens = re.findall(
         r"\b[A-Za-z0-9][A-Za-z0-9.+#&'_-]*\b",
-        text or ""
+        text or "",
     )
 
     result = []
@@ -283,6 +309,315 @@ def protected_terms(text):
             )
 
     return result[:12]
+
+
+# =========================================================
+# КАРТИНКИ
+# =========================================================
+
+def normalize_image_url(
+    url,
+    base_url=""
+):
+
+    if not url:
+        return None
+
+    url = html.unescape(
+        str(url)
+    ).strip()
+
+    if url.startswith("//"):
+
+        url = (
+            "https:"
+            + url
+        )
+
+    elif base_url:
+
+        url = urljoin(
+            base_url,
+            url,
+        )
+
+    if not url.startswith(
+        (
+            "http://",
+            "https://",
+        )
+    ):
+        return None
+
+    lowered = url.lower()
+
+    if any(
+        word in lowered
+        for word in BAD_IMAGE_WORDS
+    ):
+        return None
+
+    return url
+
+
+def image_from_feed_entry(
+    entry,
+    article_url=""
+):
+
+    candidates = []
+
+    for item in (
+        entry.get(
+            "media_content",
+            []
+        )
+        or
+        []
+    ):
+
+        if isinstance(
+            item,
+            dict
+        ):
+
+            candidates.append(
+                item.get(
+                    "url"
+                )
+            )
+
+    for item in (
+        entry.get(
+            "media_thumbnail",
+            []
+        )
+        or
+        []
+    ):
+
+        if isinstance(
+            item,
+            dict
+        ):
+
+            candidates.append(
+                item.get(
+                    "url"
+                )
+            )
+
+    for item in (
+        entry.get(
+            "enclosures",
+            []
+        )
+        or
+        []
+    ):
+
+        if not isinstance(
+            item,
+            dict
+        ):
+            continue
+
+        media_type = (
+            item.get(
+                "type"
+            )
+            or
+            ""
+        ).lower()
+
+        if media_type.startswith(
+            "image/"
+        ):
+
+            candidates.append(
+                item.get(
+                    "href"
+                )
+                or
+                item.get(
+                    "url"
+                )
+            )
+
+    for item in (
+        entry.get(
+            "links",
+            []
+        )
+        or
+        []
+    ):
+
+        if not isinstance(
+            item,
+            dict
+        ):
+            continue
+
+        media_type = (
+            item.get(
+                "type"
+            )
+            or
+            ""
+        ).lower()
+
+        rel = (
+            item.get(
+                "rel"
+            )
+            or
+            ""
+        ).lower()
+
+        if (
+            media_type.startswith(
+                "image/"
+            )
+            or
+            rel == "enclosure"
+        ):
+
+            candidates.append(
+                item.get(
+                    "href"
+                )
+            )
+
+    for candidate in candidates:
+
+        image_url = normalize_image_url(
+            candidate,
+            article_url,
+        )
+
+        if image_url:
+
+            return image_url
+
+    return None
+
+
+def image_from_article_page(
+    article_url
+):
+
+    if not article_url:
+
+        return None
+
+    if not article_url.startswith(
+        (
+            "http://",
+            "https://",
+        )
+    ):
+
+        return None
+
+    try:
+
+        response = requests.get(
+            article_url,
+
+            headers={
+                "User-Agent":
+                    "Mozilla/5.0 NewsBot/1.0"
+            },
+
+            timeout=10,
+        )
+
+        response.raise_for_status()
+
+        page = (
+            response.text[
+                :600000
+            ]
+        )
+
+        patterns = [
+            r'<meta[^>]+(?:property|name)=["\'](?:og:image|twitter:image|twitter:image:src)["\'][^>]+content=["\']([^"\']+)["\']',
+
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\'](?:og:image|twitter:image|twitter:image:src)["\']',
+
+            r'<link[^>]+rel=["\']image_src["\'][^>]+href=["\']([^"\']+)["\']',
+        ]
+
+        for pattern in patterns:
+
+            match = re.search(
+                pattern,
+                page,
+                flags=re.IGNORECASE,
+            )
+
+            if match:
+
+                image_url = normalize_image_url(
+                    match.group(1),
+                    article_url,
+                )
+
+                if image_url:
+
+                    return image_url
+
+    except Exception as error:
+
+        print(
+            "Image page error:",
+            article_url,
+            repr(error),
+        )
+
+    return None
+
+
+def ensure_event_image(
+    event
+):
+
+    if event.get(
+        "image_url"
+    ):
+
+        return event[
+            "image_url"
+        ]
+
+    sources = unique_sources(
+        event.get(
+            "sources",
+            []
+        )
+    )
+
+    for source in sources[:2]:
+
+        image_url = (
+            image_from_article_page(
+                source.get(
+                    "link",
+                    ""
+                )
+            )
+        )
+
+        if image_url:
+
+            event[
+                "image_url"
+            ] = image_url
+
+            return image_url
+
+    return None
 
 
 # =========================================================
@@ -327,7 +662,9 @@ def collect_articles(
             if not feed.entries:
                 continue
 
-            article = feed.entries[0]
+            article = (
+                feed.entries[0]
+            )
 
             title = clean_text(
                 article.get(
@@ -342,7 +679,7 @@ def collect_articles(
                     article.get(
                         "description",
                         ""
-                    )
+                    ),
                 )
             )
 
@@ -371,6 +708,12 @@ def collect_articles(
                     "link":
                         link,
 
+                    "image_url":
+                        image_from_feed_entry(
+                            article,
+                            link,
+                        ),
+
                     "protected":
                         protected_terms(
                             title
@@ -385,14 +728,14 @@ def collect_articles(
             print(
                 f"RSS error "
                 f"{feed_info['source']}:",
-                repr(error)
+                repr(error),
             )
 
     return articles
 
 
 # =========================================================
-# PROMPT ДЛЯ AI
+# PROMPT AI
 # =========================================================
 
 def make_ai_prompt(
@@ -444,8 +787,7 @@ SOURCE_BUCKET — только технический раздел RSS.
 
 1. Переведи заголовок на естественный русский.
 
-2. Дай краткое описание:
-максимум 1–2 предложения.
+2. Дай краткое описание максимум в 1–2 предложениях.
 
 3. Используй только TITLE и DESCRIPTION.
 Ничего не выдумывай.
@@ -565,6 +907,9 @@ def call_groq(
                     "reasoning_effort":
                         "low",
 
+                    "include_reasoning":
+                        False,
+
                     "stream":
                         False,
                 },
@@ -572,9 +917,15 @@ def call_groq(
                 timeout=70,
             )
 
-            if response.status_code == 200:
+            if (
+                response.status_code
+                ==
+                200
+            ):
 
-                data = response.json()
+                data = (
+                    response.json()
+                )
 
                 text = (
                     data["choices"][0]
@@ -618,7 +969,7 @@ def call_groq(
 
             print(
                 "Groq exception:",
-                repr(error)
+                repr(error),
             )
 
             time.sleep(
@@ -687,13 +1038,21 @@ def call_gemini(
                 timeout=80,
             )
 
-            if response.status_code == 200:
+            if (
+                response.status_code
+                ==
+                200
+            ):
 
-                data = response.json()
+                data = (
+                    response.json()
+                )
 
-                candidates = data.get(
-                    "candidates",
-                    []
+                candidates = (
+                    data.get(
+                        "candidates",
+                        []
+                    )
                 )
 
                 if candidates:
@@ -756,7 +1115,7 @@ def call_gemini(
 
             print(
                 "Gemini exception:",
-                repr(error)
+                repr(error),
             )
 
             time.sleep(
@@ -771,9 +1130,13 @@ def ask_ai(
 ):
 
     return (
-        call_groq(prompt)
+        call_groq(
+            prompt
+        )
         or
-        call_gemini(prompt)
+        call_gemini(
+            prompt
+        )
     )
 
 
@@ -791,9 +1154,13 @@ def parse_ai_response(
     if not raw_text:
         return processed
 
-    for line in raw_text.splitlines():
+    for line in (
+        raw_text.splitlines()
+    ):
 
-        line = line.strip()
+        line = (
+            line.strip()
+        )
 
         if not line.startswith(
             "NEWS_"
@@ -802,7 +1169,7 @@ def parse_ai_response(
 
         pieces = line.split(
             "|||",
-            5
+            5,
         )
 
         if len(pieces) != 6:
@@ -858,7 +1225,7 @@ def parse_ai_response(
             "display_region":
                 REGION_CODE_TO_LABEL.get(
                     region,
-                    "🌍 Мир"
+                    "🌍 Мир",
                 ),
 
             "title_ru":
@@ -880,8 +1247,12 @@ def process_articles_with_ai(
     )
 
     groq_result = parse_ai_response(
-        call_groq(prompt),
-        len(articles)
+        call_groq(
+            prompt
+        ),
+        len(
+            articles
+        ),
     )
 
     if (
@@ -893,8 +1264,12 @@ def process_articles_with_ai(
         return groq_result
 
     gemini_result = parse_ai_response(
-        call_gemini(prompt),
-        len(articles)
+        call_gemini(
+            prompt
+        ),
+        len(
+            articles
+        ),
     )
 
     if (
@@ -915,11 +1290,15 @@ def process_articles_with_ai(
 
         merged.setdefault(
             index,
-            item
+            item,
         )
 
     return merged or None
 
+
+# =========================================================
+# FALLBACK
+# =========================================================
 
 def fallback_processed(
     articles,
@@ -936,6 +1315,7 @@ def fallback_processed(
 
         result.setdefault(
             index,
+
             {
                 "event_id":
                     f"FALLBACK_{index}",
@@ -944,14 +1324,18 @@ def fallback_processed(
                     "MEDIUM",
 
                 "display_region":
-                    article["source_region"],
+                    article[
+                        "source_region"
+                    ],
 
                 "title_ru":
-                    article["title"],
+                    article[
+                        "title"
+                    ],
 
                 "summary_ru":
                     "",
-            }
+            },
         )
 
     return result
@@ -966,7 +1350,9 @@ def group_articles(
     processed
 ):
 
-    events = OrderedDict()
+    events = (
+        OrderedDict()
+    )
 
     for index, article in enumerate(
         articles
@@ -974,12 +1360,12 @@ def group_articles(
 
         data = processed.get(
             index,
-            {}
+            {},
         )
 
         event_id = data.get(
             "event_id",
-            f"FALLBACK_{index}"
+            f"FALLBACK_{index}",
         )
 
         if event_id not in events:
@@ -989,40 +1375,75 @@ def group_articles(
                 "region":
                     data.get(
                         "display_region",
-                        article["source_region"]
+                        article[
+                            "source_region"
+                        ],
                     ),
 
                 "title":
                     data.get(
                         "title_ru",
-                        article["title"]
+                        article[
+                            "title"
+                        ],
                     ),
 
                 "summary":
                     data.get(
                         "summary_ru",
-                        ""
+                        "",
                     ),
 
                 "impact":
                     data.get(
                         "impact",
-                        "MEDIUM"
+                        "MEDIUM",
+                    ),
+
+                "image_url":
+                    article.get(
+                        "image_url"
                     ),
 
                 "sources":
                     [],
             }
 
-        events[event_id][
+        elif (
+            not events[
+                event_id
+            ].get(
+                "image_url"
+            )
+            and
+            article.get(
+                "image_url"
+            )
+        ):
+
+            events[
+                event_id
+            ][
+                "image_url"
+            ] = article[
+                "image_url"
+            ]
+
+        events[
+            event_id
+        ][
             "sources"
         ].append(
             {
                 "name":
-                    article["source"],
+                    article[
+                        "source"
+                    ],
 
                 "link":
-                    article["link"],
+                    article[
+                        "link"
+                    ],
             }
         )
 
@@ -1049,7 +1470,7 @@ def unique_sources(
             source.get(
                 "link",
                 ""
-            )
+            ),
         )
 
         if key not in seen:
@@ -1066,7 +1487,7 @@ def unique_sources(
 
 
 # =========================================================
-# КНОПКИ ПОД НОВОСТЬЮ
+# КАРТОЧКИ НОВОСТЕЙ
 # =========================================================
 
 def save_event_card(
@@ -1083,11 +1504,13 @@ def save_event_card(
         application.bot_data
         .setdefault(
             "event_cards",
-            {}
+            {},
         )
     )
 
-    cards[card_id] = event
+    cards[
+        card_id
+    ] = event
 
     while len(cards) > 300:
 
@@ -1095,7 +1518,7 @@ def save_event_card(
             next(
                 iter(cards)
             ),
-            None
+            None,
         )
 
     return card_id
@@ -1110,105 +1533,176 @@ def make_news_keyboard(
             [
                 InlineKeyboardButton(
                     "📖 Подробнее",
+
                     callback_data=
-                        f"d:{card_id}"
+                        f"d:{card_id}",
                 ),
 
                 InlineKeyboardButton(
                     "💡 Почему важно?",
+
                     callback_data=
-                        f"w:{card_id}"
+                        f"w:{card_id}",
                 ),
             ],
 
             [
                 InlineKeyboardButton(
                     "🗞 Источники",
+
                     callback_data=
-                        f"s:{card_id}"
+                        f"s:{card_id}",
                 )
             ],
         ]
     )
 
 
+def make_event_text(
+    event
+):
+
+    sources = unique_sources(
+        event["sources"]
+    )
+
+    event[
+        "sources"
+    ] = sources
+
+    source_names = []
+
+    for source in sources:
+
+        if (
+            source["name"]
+            not in source_names
+        ):
+
+            source_names.append(
+                source[
+                    "name"
+                ]
+            )
+
+    if len(source_names) == 1:
+
+        sources_text = (
+            f"🗞 Источник: "
+            f"{source_names[0]}"
+        )
+
+    else:
+
+        sources_text = (
+            f"🗞 Источников: "
+            f"{len(source_names)} — "
+            +
+            " • ".join(
+                source_names
+            )
+        )
+
+    message = (
+        f"{event['region']}\n\n"
+        f"📰 {event['title']}\n"
+    )
+
+    if event[
+        "summary"
+    ]:
+
+        message += (
+            f"\nКоротко: "
+            f"{event['summary']}\n"
+        )
+
+    message += (
+        f"\n{sources_text}"
+    )
+
+    return message
+
+
 async def send_events(
     update,
     context,
-    events
+    events,
+    with_images=False,
 ):
 
     for event in events:
 
-        event["sources"] = (
-            unique_sources(
-                event["sources"]
-            )
-        )
-
-        source_names = []
-
-        for source in (
-            event["sources"]
-        ):
-
-            if (
-                source["name"]
-                not in source_names
-            ):
-
-                source_names.append(
-                    source["name"]
-                )
-
-        if len(source_names) == 1:
-
-            sources_text = (
-                f"🗞 Источник: "
-                f"{source_names[0]}"
-            )
-
-        else:
-
-            sources_text = (
-                f"🗞 Источников: "
-                f"{len(source_names)} — "
-                +
-                " • ".join(
-                    source_names
-                )
-            )
-
         message = (
-            f"{event['region']}\n\n"
-            f"📰 {event['title']}\n"
+            make_event_text(
+                event
+            )
         )
 
-        if event["summary"]:
+        card_id = (
+            save_event_card(
+                context.application,
+                event,
+            )
+        )
 
-            message += (
-                f"\nКоротко: "
-                f"{event['summary']}\n"
+        keyboard = (
+            make_news_keyboard(
+                card_id
+            )
+        )
+
+        # Картинки только там,
+        # где мы явно их включили.
+        if with_images:
+
+            image_url = (
+                ensure_event_image(
+                    event
+                )
             )
 
-        message += (
-            f"\n{sources_text}"
-        )
+            if image_url:
 
-        card_id = save_event_card(
-            context.application,
-            event
-        )
+                caption = (
+                    message
+                    if len(message) <= 1000
+                    else
+                    message[:997]
+                    + "..."
+                )
 
+                try:
+
+                    await update.message.reply_photo(
+                        photo=
+                            image_url,
+
+                        caption=
+                            caption,
+
+                        reply_markup=
+                            keyboard,
+                    )
+
+                    continue
+
+                except Exception as error:
+
+                    print(
+                        "Telegram photo error:",
+                        repr(error),
+                    )
+
+        # Если фото нет или оно не загрузилось,
+        # отправляем обычную текстовую карточку.
         await update.message.reply_text(
             message,
 
             disable_web_page_preview=True,
 
             reply_markup=
-                make_news_keyboard(
-                    card_id
-                ),
+                keyboard,
         )
 
 
@@ -1221,8 +1715,11 @@ def make_details_prompt(
 ):
 
     return (
-        f"Заголовок: {event['title']}\n"
-        f"Описание: {event['summary']}\n\n"
+        f"Заголовок: "
+        f"{event['title']}\n"
+
+        f"Описание: "
+        f"{event['summary']}\n\n"
 
         "Объясни подробнее на русском "
         "максимум в 5 коротких предложениях. "
@@ -1231,7 +1728,9 @@ def make_details_prompt(
         "Ничего не выдумывай. "
 
         "Сохраняй нейтральный тон. "
-        "Если данных мало — скажи об этом."
+
+        "Если данных мало — "
+        "скажи об этом."
     )
 
 
@@ -1240,13 +1739,17 @@ def make_why_prompt(
 ):
 
     return (
-        f"Заголовок: {event['title']}\n"
-        f"Описание: {event['summary']}\n\n"
+        f"Заголовок: "
+        f"{event['title']}\n"
+
+        f"Описание: "
+        f"{event['summary']}\n\n"
 
         "Объясни нейтрально, "
         "почему событие может иметь значение. "
 
         "2–4 коротких предложения. "
+
         "Не выдумывай факты. "
         "Не драматизируй. "
 
@@ -1257,10 +1760,12 @@ def make_why_prompt(
 
 async def news_callback(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    context: ContextTypes.DEFAULT_TYPE,
 ):
 
-    query = update.callback_query
+    query = (
+        update.callback_query
+    )
 
     await query.answer()
 
@@ -1269,7 +1774,7 @@ async def news_callback(
         action, card_id = (
             query.data.split(
                 ":",
-                1
+                1,
             )
         )
 
@@ -1278,10 +1783,11 @@ async def news_callback(
         return
 
     event = (
-        context.application.bot_data
+        context.application
+        .bot_data
         .get(
             "event_cards",
-            {}
+            {},
         )
         .get(
             card_id
@@ -1297,21 +1803,24 @@ async def news_callback(
 
         return
 
+    # Источники
     if action == "s":
 
         buttons = []
 
-        for source in event["sources"]:
+        for source in event[
+            "sources"
+        ]:
 
             link = source.get(
                 "link",
-                ""
+                "",
             )
 
             if link.startswith(
                 (
                     "http://",
-                    "https://"
+                    "https://",
                 )
             ):
 
@@ -1319,9 +1828,11 @@ async def news_callback(
                     [
                         InlineKeyboardButton(
                             "🔗 "
-                            + source["name"],
+                            + source[
+                                "name"
+                            ],
 
-                            url=link
+                            url=link,
                         )
                     ]
                 )
@@ -1334,7 +1845,7 @@ async def news_callback(
                 reply_markup=
                     InlineKeyboardMarkup(
                         buttons
-                    )
+                    ),
             )
 
         else:
@@ -1346,22 +1857,46 @@ async def news_callback(
 
         return
 
+    # Подробнее
     if action == "d":
 
-        cache_key = "_details"
-        title = "📖 Подробнее"
-        wait_text = "📖 Готовлю подробности..."
-        prompt = make_details_prompt(
-            event
+        cache_key = (
+            "_details"
         )
 
+        title = (
+            "📖 Подробнее"
+        )
+
+        wait_text = (
+            "📖 Готовлю подробности..."
+        )
+
+        prompt = (
+            make_details_prompt(
+                event
+            )
+        )
+
+    # Почему важно
     else:
 
-        cache_key = "_why"
-        title = "💡 Почему это важно?"
-        wait_text = "💡 Анализирую значение..."
-        prompt = make_why_prompt(
-            event
+        cache_key = (
+            "_why"
+        )
+
+        title = (
+            "💡 Почему это важно?"
+        )
+
+        wait_text = (
+            "💡 Анализирую значение..."
+        )
+
+        prompt = (
+            make_why_prompt(
+                event
+            )
         )
 
     if event.get(
@@ -1371,7 +1906,9 @@ async def news_callback(
         await query.message.reply_text(
             title
             + "\n\n"
-            + event[cache_key]
+            + event[
+                cache_key
+            ]
         )
 
         return
@@ -1395,7 +1932,9 @@ async def news_callback(
 
         return
 
-    event[cache_key] = answer
+    event[
+        cache_key
+    ] = answer
 
     await wait_message.edit_text(
         title
@@ -1405,7 +1944,7 @@ async def news_callback(
 
 
 # =========================================================
-# 💰 ФИНАНСЫ — БЕЗ AI
+# 💰 ФИНАНСЫ
 # =========================================================
 
 def xml_child_text(
@@ -1443,11 +1982,12 @@ def to_float(
 
     match = re.search(
         r"-?\d+(?:[.,]\d+)?",
+
         str(value)
         .replace(
             " ",
             ""
-        )
+        ),
     )
 
     if not match:
@@ -1459,7 +1999,7 @@ def to_float(
             match.group(0)
             .replace(
                 ",",
-                "."
+                ".",
             )
         )
 
@@ -1468,10 +2008,13 @@ def to_float(
         return None
 
 
+# =========================================================
+# КУРСЫ НБК
+# =========================================================
+
 def fetch_nbk_rates():
 
     response = requests.get(
-
         "https://nationalbank.kz/"
         "rss/rates_all.xml",
 
@@ -1514,7 +2057,7 @@ def fetch_nbk_rates():
         code = (
             xml_child_text(
                 item,
-                "title"
+                "title",
             )
             .upper()
             .strip()
@@ -1526,7 +2069,7 @@ def fetch_nbk_rates():
         value = to_float(
             xml_child_text(
                 item,
-                "description"
+                "description",
             )
         )
 
@@ -1534,7 +2077,7 @@ def fetch_nbk_rates():
             to_float(
                 xml_child_text(
                     item,
-                    "quant"
+                    "quant",
                 )
             )
             or
@@ -1547,10 +2090,12 @@ def fetch_nbk_rates():
         if quantity <= 0:
             quantity = 1.0
 
-        # НБК иногда публикует курс
-        # за несколько единиц валюты.
-        # Пересчитываем на 1 единицу.
-        rates[code] = (
+        # Нацбанк может публиковать курс
+        # сразу за несколько единиц валюты.
+        # Переводим в стоимость 1 единицы.
+        rates[
+            code
+        ] = (
             value
             /
             quantity
@@ -1559,12 +2104,15 @@ def fetch_nbk_rates():
     return rates
 
 
+# =========================================================
+# КРИПТО
+# =========================================================
+
 def fetch_coinbase_spot(
     pair
 ):
 
     response = requests.get(
-
         f"https://api.coinbase.com/"
         f"v2/prices/{pair}/spot",
 
@@ -1582,7 +2130,7 @@ def fetch_coinbase_spot(
         response.json()
         .get(
             "data",
-            {}
+            {},
         )
         .get(
             "amount"
@@ -1603,7 +2151,7 @@ def format_usd_price(
             f"${value:,.0f}"
             .replace(
                 ",",
-                " "
+                " ",
             )
         )
 
@@ -1611,14 +2159,18 @@ def format_usd_price(
         f"${value:,.2f}"
         .replace(
             ",",
-            " "
+            " ",
         )
     )
 
 
+# =========================================================
+# /MARKETS
+# =========================================================
+
 async def markets(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    context: ContextTypes.DEFAULT_TYPE,
 ):
 
     message = (
@@ -1629,43 +2181,49 @@ async def markets(
 
     try:
 
-        rates = fetch_nbk_rates()
+        rates = (
+            fetch_nbk_rates()
+        )
 
     except Exception as error:
 
         print(
             "NBK error:",
-            repr(error)
+            repr(error),
         )
 
         rates = {}
 
     try:
 
-        btc = fetch_coinbase_spot(
-            "BTC-USD"
+        btc = (
+            fetch_coinbase_spot(
+                "BTC-USD"
+            )
         )
 
     except Exception as error:
 
         print(
             "BTC error:",
-            repr(error)
+            repr(error),
         )
 
         btc = None
 
     try:
 
-        eth = fetch_coinbase_spot(
-            "ETH-USD"
+        eth = (
+            fetch_coinbase_spot(
+                "ETH-USD"
+            )
         )
 
     except Exception as error:
 
         print(
             "ETH error:",
-            repr(error)
+            repr(error),
         )
 
         eth = None
@@ -1685,38 +2243,38 @@ async def markets(
             (
                 "USD",
                 "🇺🇸",
-                "доллар"
+                "доллар",
             ),
 
             (
                 "EUR",
                 "🇪🇺",
-                "евро"
+                "евро",
             ),
 
             (
                 "GBP",
                 "🇬🇧",
-                "фунт стерлингов"
+                "фунт стерлингов",
             ),
 
             (
                 "CNY",
                 "🇨🇳",
-                "юань"
+                "юань",
             ),
 
             (
                 "RUB",
                 "🇷🇺",
-                "рубль"
+                "рубль",
             ),
         ]
 
         for (
             code,
             emoji,
-            name
+            name,
         ) in currencies:
 
             value = rates.get(
@@ -1741,6 +2299,7 @@ async def markets(
 
     lines += [
         "",
+
         "🪙 Крипто",
 
         "₿ BTC/USD ≈ "
@@ -1773,14 +2332,14 @@ async def markets(
 
 
 # =========================================================
-# НОВОСТИ
+# ЗАПРОС НОВОСТЕЙ
 # =========================================================
 
 async def run_news_request(
     update,
     context,
     region_filter=None,
-    important_only=False
+    important_only=False,
 ):
 
     if important_only:
@@ -1788,7 +2347,8 @@ async def run_news_request(
         status_text = (
             "🔥 Ищу главное...\n"
             "🌍 Проверяю источники\n"
-            "🧠 Анализирую события"
+            "🧠 Анализирую события\n"
+            "🖼 Ищу фото к главным новостям"
         )
 
     elif region_filter:
@@ -1831,12 +2391,14 @@ async def run_news_request(
 
     if (
         processed is None
-        and important_only
+        and
+        important_only
     ):
 
         await status.edit_text(
             "⚠️ Groq и Gemini сейчас "
             "не ответили.\n"
+
             "Без AI я не буду угадывать, "
             "какие новости главные."
         )
@@ -1849,14 +2411,17 @@ async def run_news_request(
 
     processed = fallback_processed(
         articles,
-        processed
+        processed,
     )
 
     events = group_articles(
         articles,
-        processed
+        processed,
     )
 
+    # Если пользователь выбрал конкретный регион,
+    # оставляем только события,
+    # которые AI реально отнёс к нему.
     if (
         region_filter
         and
@@ -1875,6 +2440,7 @@ async def run_news_request(
             )
         ]
 
+    # Главное — только HIGH
     if important_only:
 
         events = [
@@ -1887,7 +2453,6 @@ async def run_news_request(
                 ==
                 "HIGH"
             )
-
         ][:5]
 
     try:
@@ -1918,7 +2483,12 @@ async def run_news_request(
     await send_events(
         update,
         context,
-        events
+        events,
+
+        # Фото включаются только
+        # для раздела «Главное».
+        with_images=
+            important_only,
     )
 
 
@@ -1928,7 +2498,7 @@ async def run_news_request(
 
 async def brief(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    context: ContextTypes.DEFAULT_TYPE,
 ):
 
     status = (
@@ -1937,7 +2507,9 @@ async def brief(
         )
     )
 
-    articles = collect_articles()
+    articles = (
+        collect_articles()
+    )
 
     if not articles:
 
@@ -1965,22 +2537,19 @@ async def brief(
         return
 
     events = group_articles(
-
         articles,
 
         fallback_processed(
             articles,
-            processed
-        )
+            processed,
+        ),
     )
 
     events.sort(
-
         key=lambda event: (
-
             IMPACT_RANK.get(
                 event["impact"],
-                0
+                0,
             ),
 
             len(
@@ -1990,7 +2559,7 @@ async def brief(
             ),
         ),
 
-        reverse=True
+        reverse=True,
     )
 
     try:
@@ -2001,13 +2570,14 @@ async def brief(
 
         pass
 
-    top_events = events[:5]
+    top_events = (
+        events[:5]
+    )
 
     text = (
         "⚡ Коротко: 5 событий\n\n"
         +
         "\n\n".join(
-
             f"{number}. "
             f"{event['region']} "
             f"{event['title']}"
@@ -2015,7 +2585,7 @@ async def brief(
             for number, event
             in enumerate(
                 top_events,
-                1
+                1,
             )
         )
     )
@@ -2026,16 +2596,15 @@ async def brief(
 
 
 # =========================================================
-# КОМАНДЫ
+# ОСНОВНЫЕ КОМАНДЫ
 # =========================================================
 
 async def start(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    context: ContextTypes.DEFAULT_TYPE,
 ):
 
     await update.message.reply_text(
-
         "👋 Привет!\n\n"
 
         "Я собираю новости "
@@ -2052,43 +2621,44 @@ async def start(
 
 async def menu(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    context: ContextTypes.DEFAULT_TYPE,
 ):
 
     await update.message.reply_text(
         "Выбирай раздел 👇",
 
         reply_markup=
-            MAIN_MENU
+            MAIN_MENU,
     )
 
 
 async def news(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    await run_news_request(
-        update,
-        context
-    )
-
-
-async def important(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    context: ContextTypes.DEFAULT_TYPE,
 ):
 
     await run_news_request(
         update,
         context,
-        important_only=True
+    )
+
+
+async def important(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    await run_news_request(
+        update,
+        context,
+
+        important_only=True,
     )
 
 
 async def manutd(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    context: ContextTypes.DEFAULT_TYPE,
 ):
 
     await update.message.reply_text(
@@ -2099,7 +2669,7 @@ async def manutd(
 
 async def region_command(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    context: ContextTypes.DEFAULT_TYPE,
 ):
 
     command = (
@@ -2121,8 +2691,9 @@ async def region_command(
         await run_news_request(
             update,
             context,
+
             region_filter=
-                region
+                region,
         )
 
 
@@ -2140,13 +2711,12 @@ def test_groq_connection():
 
         return (
             False,
-            "нет ключа"
+            "нет ключа",
         )
 
     try:
 
         response = requests.get(
-
             "https://api.groq.com/"
             "openai/v1/models",
 
@@ -2158,12 +2728,16 @@ def test_groq_connection():
             timeout=15,
         )
 
-        if response.status_code != 200:
+        if (
+            response.status_code
+            !=
+            200
+        ):
 
             return (
                 False,
                 f"HTTP "
-                f"{response.status_code}"
+                f"{response.status_code}",
             )
 
         models = {
@@ -2175,7 +2749,7 @@ def test_groq_connection():
                 response.json()
                 .get(
                     "data",
-                    []
+                    [],
                 )
             )
         }
@@ -2184,19 +2758,19 @@ def test_groq_connection():
 
             return (
                 True,
-                "API и модель доступны"
+                "API и модель доступны",
             )
 
         return (
             False,
-            "модель не найдена"
+            "модель не найдена",
         )
 
     except Exception:
 
         return (
             False,
-            "нет ответа"
+            "нет ответа",
         )
 
 
@@ -2210,13 +2784,12 @@ def test_gemini_connection():
 
         return (
             False,
-            "нет ключа"
+            "нет ключа",
         )
 
     try:
 
         response = requests.get(
-
             "https://generativelanguage.googleapis.com/"
             "v1beta/models",
 
@@ -2228,29 +2801,32 @@ def test_gemini_connection():
             timeout=15,
         )
 
-        if response.status_code != 200:
+        if (
+            response.status_code
+            !=
+            200
+        ):
 
             return (
                 False,
                 f"HTTP "
-                f"{response.status_code}"
+                f"{response.status_code}",
             )
 
         models = {
-
             item.get(
                 "name",
-                ""
+                "",
             ).replace(
                 "models/",
-                ""
+                "",
             )
 
             for item in (
                 response.json()
                 .get(
                     "models",
-                    []
+                    [],
                 )
             )
         }
@@ -2259,25 +2835,25 @@ def test_gemini_connection():
 
             return (
                 True,
-                "API и модель доступны"
+                "API и модель доступны",
             )
 
         return (
             False,
-            "модель не найдена"
+            "модель не найдена",
         )
 
     except Exception:
 
         return (
             False,
-            "нет ответа"
+            "нет ответа",
         )
 
 
 async def status(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    context: ContextTypes.DEFAULT_TYPE,
 ):
 
     message = (
@@ -2313,7 +2889,7 @@ async def status(
 
 async def menu_buttons(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    context: ContextTypes.DEFAULT_TYPE,
 ):
 
     text = (
@@ -2325,28 +2901,28 @@ async def menu_buttons(
 
         return await important(
             update,
-            context
+            context,
         )
 
     if text == "⚡ Кратко":
 
         return await brief(
             update,
-            context
+            context,
         )
 
     if text == "📰 Все новости":
 
         return await news(
             update,
-            context
+            context,
         )
 
     if text == "💰 Финансы":
 
         return await markets(
             update,
-            context
+            context,
         )
 
     region = (
@@ -2360,91 +2936,93 @@ async def menu_buttons(
         return await run_news_request(
             update,
             context,
+
             region_filter=
-                region
+                region,
         )
 
     await update.message.reply_text(
-        "Выбери раздел кнопками ниже 👇",
+        "Выбери раздел "
+        "кнопками ниже 👇",
 
         reply_markup=
-            MAIN_MENU
+            MAIN_MENU,
     )
 
 
 # =========================================================
-# СПИСОК КОМАНД TELEGRAM
+# КОМАНДЫ TELEGRAM
 # =========================================================
 
 async def post_init(
-    application: Application
+    application: Application,
 ):
 
     await application.bot.set_my_commands(
         [
             BotCommand(
                 "news",
-                "Все новости"
+                "Все новости",
             ),
 
             BotCommand(
                 "brief",
-                "5 новостей коротко"
+                "5 новостей коротко",
             ),
 
             BotCommand(
                 "important",
-                "Главные события"
+                "Главные события",
             ),
 
             BotCommand(
                 "markets",
-                "Финансы"
+                "Финансы",
             ),
 
             BotCommand(
                 "kz",
-                "Казахстан"
+                "Казахстан",
             ),
 
             BotCommand(
                 "usa",
-                "США"
+                "США",
             ),
 
             BotCommand(
                 "europe",
-                "Европа"
+                "Европа",
             ),
 
             BotCommand(
                 "china",
-                "Китай"
+                "Китай",
             ),
 
             BotCommand(
                 "russia",
-                "Россия"
+                "Россия",
             ),
 
             BotCommand(
                 "world",
-                "Мир"
+                "Мир",
             ),
 
             BotCommand(
                 "ai",
-                "AI и технологии"
+                "AI и технологии",
             ),
 
             BotCommand(
                 "menu",
-                "Показать меню"
+                "Показать меню",
             ),
 
             BotCommand(
                 "status",
-                "Проверить AI"
+                "Проверить AI",
             ),
         ]
     )
@@ -2460,7 +3038,7 @@ def main():
         target=
             run_web_server,
 
-        daemon=True
+        daemon=True,
     ).start()
 
     app = (
@@ -2482,42 +3060,42 @@ def main():
     handlers = [
         (
             "start",
-            start
+            start,
         ),
 
         (
             "menu",
-            menu
+            menu,
         ),
 
         (
             "news",
-            news
+            news,
         ),
 
         (
             "brief",
-            brief
+            brief,
         ),
 
         (
             "important",
-            important
+            important,
         ),
 
         (
             "markets",
-            markets
+            markets,
         ),
 
         (
             "status",
-            status
+            status,
         ),
 
         (
             "manutd",
-            manutd
+            manutd,
         ),
     ]
 
@@ -2526,7 +3104,7 @@ def main():
         app.add_handler(
             CommandHandler(
                 command,
-                function
+                function,
             )
         )
 
@@ -2535,7 +3113,7 @@ def main():
         app.add_handler(
             CommandHandler(
                 command,
-                region_command
+                region_command,
             )
         )
 
@@ -2547,12 +3125,11 @@ def main():
 
     app.add_handler(
         MessageHandler(
-
             filters.TEXT
             &
             ~filters.COMMAND,
 
-            menu_buttons
+            menu_buttons,
         )
     )
 
