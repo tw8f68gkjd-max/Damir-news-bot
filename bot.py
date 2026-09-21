@@ -7,74 +7,167 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import feedparser
 import requests
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, ReplyKeyboardMarkup, BotCommand
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 
 # ==========================================
-# ИСТОЧНИКИ НОВОСТЕЙ
+# НАСТРОЙКИ
 # ==========================================
 
-NEWS_FEEDS = {
+GEMINI_MODEL = "gemini-3.8-flash"
+
+
+NEWS_FEEDS = [
+
     # 🇰🇿 КАЗАХСТАН
-    "🇰🇿 Казахстан • Kazinform":
-        "https://qazinform.com/rss/en.xml",
+    {
+        "region": "🇰🇿 Казахстан",
+        "source": "Kazinform",
+        "url": "https://qazinform.com/rss/en.xml"
+    },
 
-    "🇰🇿 Казахстан • The Astana Times":
-        "https://astanatimes.com/feed/",
+    {
+        "region": "🇰🇿 Казахстан",
+        "source": "The Astana Times",
+        "url": "https://astanatimes.com/feed/"
+    },
 
 
     # 🇺🇸 США
-    "🇺🇸 США • NPR":
-        "https://feeds.npr.org/1003/rss.xml",
+    {
+        "region": "🇺🇸 США",
+        "source": "NPR",
+        "url": "https://feeds.npr.org/1003/rss.xml"
+    },
 
-    "🇺🇸 США • BBC":
-        "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml",
+    {
+        "region": "🇺🇸 США",
+        "source": "BBC",
+        "url": "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml"
+    },
 
 
     # 🇪🇺 ЕВРОПА
-    "🇪🇺 Европа • Euronews":
-        "https://euronews.com/rss?format=mrss&level=vertical&name=my-europe",
+    {
+        "region": "🇪🇺 Европа",
+        "source": "Euronews",
+        "url": "https://euronews.com/rss?format=mrss&level=vertical&name=my-europe"
+    },
 
-    "🇪🇺 Европа • BBC":
-        "https://feeds.bbci.co.uk/news/world/europe/rss.xml",
+    {
+        "region": "🇪🇺 Европа",
+        "source": "BBC",
+        "url": "https://feeds.bbci.co.uk/news/world/europe/rss.xml"
+    },
 
 
     # 🇨🇳 КИТАЙ
-    "🇨🇳 Китай • China News Service":
-        "https://www.chinanews.com.cn/rss/china.xml",
+    {
+        "region": "🇨🇳 Китай",
+        "source": "China News Service",
+        "url": "https://www.chinanews.com.cn/rss/china.xml"
+    },
 
-    "🇨🇳 Китай • BBC":
-        "https://feeds.bbci.co.uk/news/world/asia/china/rss.xml",
+    {
+        "region": "🇨🇳 Китай",
+        "source": "BBC",
+        "url": "https://feeds.bbci.co.uk/news/world/asia/china/rss.xml"
+    },
 
 
     # 🇷🇺 РОССИЯ
-    "🇷🇺 Россия • Интерфакс":
-        "https://www.interfax.ru/rss.asp",
+    {
+        "region": "🇷🇺 Россия",
+        "source": "Интерфакс",
+        "url": "https://www.interfax.ru/rss.asp"
+    },
 
-    "🇷🇺 Россия • Meduza":
-        "https://meduza.io/rss2/all",
+    {
+        "region": "🇷🇺 Россия",
+        "source": "Meduza",
+        "url": "https://meduza.io/rss2/all"
+    },
 
 
     # 🌍 МИР
-    "🌍 Мир • Euronews":
-        "https://www.euronews.com/rss?format=mrss&level=theme&name=news",
+    {
+        "region": "🌍 Мир",
+        "source": "Euronews",
+        "url": "https://www.euronews.com/rss?format=mrss&level=theme&name=news"
+    },
 
-    "🌍 Мир • BBC":
-        "https://feeds.bbci.co.uk/news/world/rss.xml",
+    {
+        "region": "🌍 Мир",
+        "source": "BBC",
+        "url": "https://feeds.bbci.co.uk/news/world/rss.xml"
+    },
 
 
     # 🤖 AI / ТЕХНОЛОГИИ
-    "🤖 AI • TechCrunch":
-        "https://techcrunch.com/category/artificial-intelligence/feed/",
+    {
+        "region": "🤖 AI / технологии",
+        "source": "TechCrunch",
+        "url": "https://techcrunch.com/category/artificial-intelligence/feed/"
+    },
 
-    "🤖 AI / технологии • The Verge":
-        "https://www.theverge.com/rss/index.xml",
+    {
+        "region": "🤖 AI / технологии",
+        "source": "The Verge",
+        "url": "https://www.theverge.com/rss/index.xml"
+    },
+]
+
+
+# ==========================================
+# КНОПКИ
+# ==========================================
+
+MAIN_MENU = ReplyKeyboardMarkup(
+    [
+        ["🔥 Главное", "📰 Все новости"],
+        ["🇰🇿 Казахстан", "🇺🇸 США"],
+        ["🇪🇺 Европа", "🇨🇳 Китай"],
+        ["🇷🇺 Россия", "🌍 Мир"],
+        ["🤖 AI / технологии"],
+    ],
+    resize_keyboard=True,
+)
+
+
+BUTTON_TO_REGION = {
+    "🇰🇿 Казахстан": "🇰🇿 Казахстан",
+    "🇺🇸 США": "🇺🇸 США",
+    "🇪🇺 Европа": "🇪🇺 Европа",
+    "🇨🇳 Китай": "🇨🇳 Китай",
+    "🇷🇺 Россия": "🇷🇺 Россия",
+    "🌍 Мир": "🌍 Мир",
+    "🤖 AI / технологии": "🤖 AI / технологии",
 }
 
 
-# Эта модель у тебя уже успешно работает
-GEMINI_MODEL = "gemini-3.8-flash"
+COMMAND_TO_REGION = {
+    "kz": "🇰🇿 Казахстан",
+    "usa": "🇺🇸 США",
+    "europe": "🇪🇺 Европа",
+    "china": "🇨🇳 Китай",
+    "russia": "🇷🇺 Россия",
+    "world": "🌍 Мир",
+    "ai": "🤖 AI / технологии",
+}
+
+
+IMPACT_RANK = {
+    "LOW": 1,
+    "MEDIUM": 2,
+    "HIGH": 3,
+}
 
 
 # ==========================================
@@ -82,38 +175,64 @@ GEMINI_MODEL = "gemini-3.8-flash"
 # ==========================================
 
 class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"Bot is running")
 
-    def log_message(self, format, *args):
+    def do_GET(self):
+
+        self.send_response(200)
+
+        self.send_header(
+            "Content-type",
+            "text/plain"
+        )
+
+        self.end_headers()
+
+        self.wfile.write(
+            b"Bot is running"
+        )
+
+
+    def log_message(
+        self,
+        format,
+        *args
+    ):
         return
 
 
 def run_web_server():
-    port = int(os.environ.get("PORT", 10000))
+
+    port = int(
+        os.environ.get(
+            "PORT",
+            10000
+        )
+    )
 
     server = HTTPServer(
         ("0.0.0.0", port),
         HealthHandler
     )
 
-    print(f"Web server started on port {port}")
+    print(
+        f"Web server started on port {port}"
+    )
 
     server.serve_forever()
 
 
 # ==========================================
-# ОЧИСТКА RSS-ТЕКСТА
+# ОЧИСТКА ТЕКСТА
 # ==========================================
 
 def clean_text(text):
+
     if not text:
         return ""
 
-    text = html.unescape(str(text))
+    text = html.unescape(
+        str(text)
+    )
 
     text = re.sub(
         r"<[^>]+>",
@@ -122,150 +241,327 @@ def clean_text(text):
     )
 
     text = " ".join(
-        text.replace("\n", " ").split()
+        text
+        .replace("\n", " ")
+        .split()
     )
 
     return text
 
 
 # ==========================================
-# GEMINI
-# ПЕРЕВОД + КРАТКО + ОБЪЕДИНЕНИЕ ДУБЛЕЙ
+# ПОЛУЧЕНИЕ НОВОСТЕЙ
 # ==========================================
 
-def process_articles_with_gemini(articles):
-    api_key = os.environ.get("GEMINI_API_KEY")
+def collect_articles(
+    region_filter=None
+):
+
+    articles = []
+
+
+    for feed_info in NEWS_FEEDS:
+
+        if (
+            region_filter
+            and
+            feed_info["region"]
+            != region_filter
+        ):
+            continue
+
+
+        try:
+
+            response = requests.get(
+                feed_info["url"],
+                headers={
+                    "User-Agent":
+                    "Mozilla/5.0 NewsBot/1.0"
+                },
+                timeout=15,
+            )
+
+
+            response.raise_for_status()
+
+
+            feed = feedparser.parse(
+                response.content
+            )
+
+
+            if not feed.entries:
+
+                print(
+                    "No articles from:",
+                    feed_info["source"]
+                )
+
+                continue
+
+
+            article = feed.entries[0]
+
+
+            title = clean_text(
+                article.get(
+                    "title",
+                    ""
+                )
+            )
+
+
+            description = clean_text(
+                article.get(
+                    "summary",
+                    article.get(
+                        "description",
+                        ""
+                    )
+                )
+            )
+
+
+            link = article.get(
+                "link",
+                ""
+            )
+
+
+            if not title:
+                continue
+
+
+            articles.append({
+
+                "region":
+                    feed_info["region"],
+
+                "source":
+                    feed_info["source"],
+
+                "title":
+                    title,
+
+                "description":
+                    description,
+
+                "link":
+                    link,
+            })
+
+
+        except Exception as error:
+
+            print(
+                f"RSS error "
+                f"{feed_info['source']}:",
+                repr(error)
+            )
+
+
+    return articles
+
+
+# ==========================================
+# GEMINI
+# перевод + описание + дубли + важность
+# ==========================================
+
+def process_articles_with_gemini(
+    articles
+):
+
+    api_key = os.environ.get(
+        "GEMINI_API_KEY"
+    )
+
 
     if not api_key:
-        print("GEMINI_API_KEY missing")
+
+        print(
+            "GEMINI_API_KEY missing"
+        )
+
         return None
+
 
     url = (
         "https://generativelanguage.googleapis.com/v1beta/"
         f"models/{GEMINI_MODEL}:generateContent"
     )
 
-    article_lines = []
 
-    for index, article in enumerate(articles):
+    blocks = []
 
-        title = clean_text(
-            article["title"]
-        )
+
+    for index, article in enumerate(
+        articles
+    ):
 
         description = clean_text(
             article.get(
                 "description",
                 ""
             )
-        )
+        )[:700]
 
-        # Не отправляем слишком длинные тексты
-        description = description[:700]
 
-        article_lines.append(
+        blocks.append(
             f"""
 NEWS_{index}
 REGION: {article['region']}
 SOURCE: {article['source']}
-TITLE: {title}
+TITLE: {article['title']}
 DESCRIPTION: {description}
 """.strip()
         )
 
+
     articles_text = "\n\n".join(
-        article_lines
+        blocks
     )
 
+
     prompt = f"""
-Ты работаешь как редактор русскоязычного новостного агрегатора.
+Ты редактор русскоязычного новостного агрегатора.
 
-Перед тобой публикации разных СМИ.
+Обработай каждую публикацию ниже.
 
-Для КАЖДОЙ публикации:
+Для каждой NEWS_:
 
 1. Переведи заголовок на естественный русский язык.
 
-2. Напиши краткое описание новости на русском:
-максимум 1–2 коротких предложения.
+2. Сделай короткое описание:
+максимум 1–2 предложения.
 
-3. Используй ТОЛЬКО информацию из TITLE и DESCRIPTION.
+3. Используй только информацию
+из TITLE и DESCRIPTION.
+
 Ничего не выдумывай.
 
-4. Сохраняй точно:
-имена людей,
+4. Точно сохраняй:
+имена,
 названия компаний,
 страны,
 даты,
 суммы,
 проценты
-и другие числа.
+и числа.
 
-5. Если две или несколько публикаций описывают
-одно и то же КОНКРЕТНОЕ событие,
+5. Если несколько публикаций
+описывают одно и то же КОНКРЕТНОЕ событие,
 дай им одинаковый EVENT_ID.
 
-6. Если публикации просто относятся к похожей теме,
-но события разные — EVENT_ID должен быть разным.
+6. Если тема похожа,
+но события разные,
+EVENT_ID должен быть разным.
 
-7. Если сомневаешься, объединять ли публикации,
-НЕ объединяй их.
+7. Если сомневаешься —
+НЕ объединяй.
 
-8. Для публикаций об одном событии
-используй максимально похожий русский заголовок
-и одинаковую суть.
+8. Определи масштаб события:
 
-9. Не представляй мнение, обвинение,
-предположение или заявление источника
+HIGH =
+крупное событие с широким
+международным или национальным влиянием,
+серьёзной угрозой безопасности,
+значительным экономическим эффектом
+или важным решением государственных
+или международных институтов.
+
+MEDIUM =
+заметное событие,
+но более ограниченного масштаба.
+
+LOW =
+локальная,
+узкая
+или нишевая новость.
+
+Не повышай важность
+из-за политической позиции,
+эмоционального тона
+или мнения конкретного СМИ.
+
+9. Не представляй
+заявление,
+обвинение,
+мнение,
+предположение
+или прогноз
 как установленный факт.
 
-Верни РОВНО по одной строке для каждого NEWS_.
 
-Формат строго такой:
+Формат каждой строки СТРОГО:
 
-NEWS_0|||EVENT_1|||РУССКИЙ ЗАГОЛОВОК|||КРАТКОЕ ОПИСАНИЕ
-NEWS_1|||EVENT_2|||РУССКИЙ ЗАГОЛОВОК|||КРАТКОЕ ОПИСАНИЕ
+NEWS_0|||EVENT_1|||HIGH|||РУССКИЙ ЗАГОЛОВОК|||КРАТКОЕ ОПИСАНИЕ
 
-Если NEWS_2 и NEWS_3 говорят об одном событии:
 
-NEWS_2|||EVENT_3|||РУССКИЙ ЗАГОЛОВОК|||КРАТКОЕ ОПИСАНИЕ
-NEWS_3|||EVENT_3|||РУССКИЙ ЗАГОЛОВОК|||КРАТКОЕ ОПИСАНИЕ
+Разрешённые уровни:
+
+HIGH
+MEDIUM
+LOW
+
+
+Верни ровно одну строку
+для каждого NEWS_.
 
 Не используй Markdown.
 Не используй JSON.
-Не используй ``` .
-Не пиши объяснений.
+Не пиши пояснений.
 Не пропускай NEWS_.
 
-Вот публикации:
+
+Публикации:
 
 {articles_text}
 """
 
+
     try:
+
         response = requests.post(
+
             url,
+
             headers={
-                "Content-Type": "application/json",
-                "x-goog-api-key": api_key,
+                "Content-Type":
+                "application/json",
+
+                "x-goog-api-key":
+                api_key,
             },
+
+
             json={
                 "contents": [
                     {
                         "parts": [
                             {
-                                "text": prompt
+                                "text":
+                                prompt
                             }
                         ]
                     }
                 ],
+
                 "generationConfig": {
-                    "temperature": 0.1,
-                    "maxOutputTokens": 5000
-                }
+
+                    "temperature":
+                        0.1,
+
+                    "maxOutputTokens":
+                        6000,
+                },
             },
+
+
             timeout=90,
         )
+
 
         if response.status_code != 200:
 
@@ -277,19 +573,24 @@ NEWS_3|||EVENT_3|||РУССКИЙ ЗАГОЛОВОК|||КРАТКОЕ ОПИСА
 
             return None
 
+
         data = response.json()
+
 
         candidates = data.get(
             "candidates",
             []
         )
 
+
         if not candidates:
+
             print(
                 "Gemini returned no candidates"
             )
 
             return None
+
 
         parts = (
             candidates[0]
@@ -297,42 +598,82 @@ NEWS_3|||EVENT_3|||РУССКИЙ ЗАГОЛОВОК|||КРАТКОЕ ОПИСА
             .get("parts", [])
         )
 
+
         raw_text = "\n".join(
-            part.get("text", "")
+
+            part.get(
+                "text",
+                ""
+            )
+
             for part in parts
-            if part.get("text")
+
+            if part.get(
+                "text"
+            )
+
         ).strip()
+
 
         print(
             "Gemini processed articles:",
             raw_text[:3000]
         )
 
+
         processed = {}
+
 
         for line in raw_text.splitlines():
 
             line = line.strip()
+
 
             if not line.startswith(
                 "NEWS_"
             ):
                 continue
 
+
             pieces = line.split(
                 "|||",
-                3
+                4
             )
 
-            if len(pieces) != 4:
+
+            if len(pieces) != 5:
                 continue
 
-            news_id = pieces[0].strip()
-            event_id = pieces[1].strip()
-            title_ru = pieces[2].strip()
-            summary_ru = pieces[3].strip()
+
+            news_id = (
+                pieces[0]
+                .strip()
+            )
+
+            event_id = (
+                pieces[1]
+                .strip()
+            )
+
+            impact = (
+                pieces[2]
+                .strip()
+                .upper()
+            )
+
+            title_ru = (
+                pieces[3]
+                .strip()
+            )
+
+            summary_ru = (
+                pieces[4]
+                .strip()
+            )
+
 
             try:
+
                 index = int(
                     news_id.replace(
                         "NEWS_",
@@ -340,16 +681,35 @@ NEWS_3|||EVENT_3|||РУССКИЙ ЗАГОЛОВОК|||КРАТКОЕ ОПИСА
                     )
                 )
 
+
             except ValueError:
+
                 continue
 
+
+            if impact not in IMPACT_RANK:
+
+                impact = "MEDIUM"
+
+
             processed[index] = {
-                "event_id": event_id,
-                "title_ru": title_ru,
-                "summary_ru": summary_ru,
+
+                "event_id":
+                    event_id,
+
+                "impact":
+                    impact,
+
+                "title_ru":
+                    title_ru,
+
+                "summary_ru":
+                    summary_ru,
             }
 
+
         return processed
+
 
     except Exception as error:
 
@@ -362,52 +722,140 @@ NEWS_3|||EVENT_3|||РУССКИЙ ЗАГОЛОВОК|||КРАТКОЕ ОПИСА
 
 
 # ==========================================
-# ОБЪЕДИНЕНИЕ ОДИНАКОВЫХ СОБЫТИЙ
+# РЕЗЕРВНЫЙ РЕЖИМ
+# ==========================================
+
+def fallback_processed(
+    articles
+):
+
+    result = {}
+
+
+    for index, article in enumerate(
+        articles
+    ):
+
+        result[index] = {
+
+            "event_id":
+                f"FALLBACK_{index}",
+
+            "impact":
+                "MEDIUM",
+
+            "title_ru":
+                article["title"],
+
+            "summary_ru":
+                "",
+        }
+
+
+    return result
+
+
+# ==========================================
+# ОБЪЕДИНЕНИЕ ДУБЛЕЙ
 # ==========================================
 
 def group_articles(
     articles,
     processed
 ):
+
     events = OrderedDict()
+
 
     for index, article in enumerate(
         articles
     ):
 
-        gemini_data = processed.get(
+        data = processed.get(
             index,
             {}
         )
 
-        event_id = gemini_data.get(
+
+        event_id = data.get(
             "event_id",
             f"FALLBACK_{index}"
         )
 
-        title_ru = gemini_data.get(
+
+        title_ru = data.get(
             "title_ru",
             article["title"]
         )
 
-        summary_ru = gemini_data.get(
+
+        summary_ru = data.get(
             "summary_ru",
             ""
         )
 
+
+        impact = data.get(
+            "impact",
+            "MEDIUM"
+        )
+
+
         if event_id not in events:
 
             events[event_id] = {
-                "region": article["region"],
-                "title": title_ru,
-                "summary": summary_ru,
-                "sources": []
+
+                "region":
+                    article["region"],
+
+                "title":
+                    title_ru,
+
+                "summary":
+                    summary_ru,
+
+                "impact":
+                    impact,
+
+                "sources":
+                    [],
             }
 
-        events[event_id]["sources"].append({
-            "name": article["source"],
-            "link": article["link"]
+
+        else:
+
+            old_impact = (
+                events[event_id]
+                ["impact"]
+            )
+
+
+            if (
+                IMPACT_RANK[
+                    impact
+                ]
+                >
+                IMPACT_RANK[
+                    old_impact
+                ]
+            ):
+
+                events[event_id][
+                    "impact"
+                ] = impact
+
+
+        events[event_id][
+            "sources"
+        ].append({
+
+            "name":
+                article["source"],
+
+            "link":
+                article["link"],
         })
+
 
     return list(
         events.values()
@@ -415,201 +863,78 @@ def group_articles(
 
 
 # ==========================================
-# /START
+# УБИРАЕМ ПОВТОРЫ ССЫЛОК
 # ==========================================
 
-async def start(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-    await update.message.reply_text(
-        "👋 Привет!\n\n"
-        "Я собираю свежие новости из разных источников, "
-        "перевожу их на русский и объединяю одинаковые события.\n\n"
-        "📰 /news — получить свежие новости"
-    )
-
-
-# ==========================================
-# ПАСХАЛКА /MANUTD 😈
-# ==========================================
-
-async def manutd(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-    await update.message.reply_text(
-        "Муха Лох! 😂"
-    )
-
-
-# ==========================================
-# /NEWS
-# ==========================================
-
-async def news(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+def unique_sources(
+    sources
 ):
 
-    status_message = (
-        await update.message.reply_text(
-            "🔎 Собираю новости...\n"
-            "🌍 Проверяю источники\n"
-            "🇷🇺 Перевожу на русский\n"
-            "🧠 Ищу одинаковые события"
-        )
-    )
+    result = []
 
-    articles = []
+    seen = set()
 
-    for category, url in NEWS_FEEDS.items():
 
-        try:
-            feed = feedparser.parse(
-                url
-            )
+    for source in sources:
 
-            if not feed.entries:
+        key = (
 
-                print(
-                    f"No articles from: {category}"
-                )
+            source.get(
+                "name",
+                ""
+            ),
 
-                continue
-
-            article = feed.entries[0]
-
-            title = clean_text(
-                article.get(
-                    "title",
-                    ""
-                )
-            )
-
-            description = clean_text(
-                article.get(
-                    "summary",
-                    article.get(
-                        "description",
-                        ""
-                    )
-                )
-            )
-
-            link = article.get(
+            source.get(
                 "link",
                 ""
             )
-
-            source_name = (
-                feed.feed.get(
-                    "title",
-                    category
-                    .split("•")[-1]
-                    .strip()
-                )
-            )
-
-            if not title:
-                continue
-
-            region = (
-                category
-                .split("•")[0]
-                .strip()
-            )
-
-            articles.append({
-                "region": region,
-                "title": title,
-                "description": description,
-                "link": link,
-                "source": source_name,
-            })
-
-        except Exception as error:
-
-            print(
-                f"RSS error {category}:",
-                repr(error)
-            )
-
-
-    if not articles:
-
-        await status_message.edit_text(
-            "❌ Сейчас не удалось получить новости."
         )
 
-        return
+
+        if key in seen:
+            continue
 
 
-    processed = (
-        process_articles_with_gemini(
-            articles
-        )
-    )
-
-
-    if processed is None:
-
-        await status_message.edit_text(
-            "⚠️ Новости получены, "
-            "но Gemini сейчас не смог их обработать."
+        seen.add(
+            key
         )
 
-        return
+
+        result.append(
+            source
+        )
 
 
-    events = group_articles(
-        articles,
-        processed
-    )
+    return result
 
 
-    try:
-        await status_message.delete()
+# ==========================================
+# ОТПРАВКА СОБЫТИЙ
+# ==========================================
 
-    except Exception:
-        pass
-
-
-    await update.message.reply_text(
-        f"📰 Публикаций найдено: {len(articles)}\n"
-        f"🧠 Отдельных событий: {len(events)}"
-    )
-
+async def send_events(
+    update,
+    events
+):
 
     for event in events:
 
-        unique_sources = []
-        seen_links = set()
 
-        for source in event["sources"]:
-
-            link = source["link"]
-
-            if link in seen_links:
-                continue
-
-            seen_links.add(
-                link
-            )
-
-            unique_sources.append(
-                source
-            )
+        sources = unique_sources(
+            event["sources"]
+        )
 
 
         source_names = []
 
-        for source in unique_sources:
+
+        for source in sources:
 
             if (
                 source["name"]
                 not in source_names
             ):
+
                 source_names.append(
                     source["name"]
                 )
@@ -621,6 +946,7 @@ async def news(
                 f"🗞 Источник: "
                 f"{source_names[0]}"
             )
+
 
         else:
 
@@ -652,10 +978,11 @@ async def news(
         )
 
 
-        for source in unique_sources:
+        for source in sources:
 
             message += (
-                f"\n🔗 {source['name']}: "
+                f"\n🔗 "
+                f"{source['name']}: "
                 f"{source['link']}"
             )
 
@@ -667,6 +994,7 @@ async def news(
                 disable_web_page_preview=True
             )
 
+
         except Exception as error:
 
             print(
@@ -676,7 +1004,415 @@ async def news(
 
 
 # ==========================================
-# ЗАПУСК БОТА
+# ОСНОВНАЯ ЛОГИКА НОВОСТЕЙ
+# ==========================================
+
+async def run_news_request(
+    update,
+    region_filter=None,
+    important_only=False
+):
+
+
+    if important_only:
+
+        status_text = (
+            "🔥 Ищу главное...\n"
+            "🌍 Проверяю источники\n"
+            "🧠 Сравниваю события\n"
+            "🇷🇺 Готовлю на русском"
+        )
+
+
+    elif region_filter:
+
+        status_text = (
+            f"🔎 Собираю: "
+            f"{region_filter}\n"
+            f"🇷🇺 Перевожу "
+            f"и объединяю дубли"
+        )
+
+
+    else:
+
+        status_text = (
+            "🔎 Собираю новости...\n"
+            "🌍 Проверяю источники\n"
+            "🇷🇺 Перевожу\n"
+            "🧠 Объединяю одинаковые события"
+        )
+
+
+    status_message = (
+        await update.message.reply_text(
+            status_text
+        )
+    )
+
+
+    articles = collect_articles(
+        region_filter=region_filter
+    )
+
+
+    if not articles:
+
+        await status_message.edit_text(
+            "❌ Сейчас не удалось "
+            "получить новости."
+        )
+
+        return
+
+
+    processed = (
+        process_articles_with_gemini(
+            articles
+        )
+    )
+
+
+    if (
+        processed is None
+        and
+        important_only
+    ):
+
+        await status_message.edit_text(
+            "⚠️ Gemini сейчас недоступен, "
+            "поэтому я не могу надёжно "
+            "определить главное."
+        )
+
+        return
+
+
+    ai_failed = (
+        processed is None
+    )
+
+
+    if ai_failed:
+
+        processed = fallback_processed(
+            articles
+        )
+
+
+    events = group_articles(
+        articles,
+        processed
+    )
+
+
+    # ======================================
+    # ГЛАВНЫЕ НОВОСТИ
+    # ======================================
+
+    if important_only:
+
+        events = [
+
+            event
+
+            for event in events
+
+            if event[
+                "impact"
+            ] == "HIGH"
+        ]
+
+
+        # Максимум 5 главных событий
+
+        events = events[:5]
+
+
+    try:
+
+        await status_message.delete()
+
+
+    except Exception:
+
+        pass
+
+
+    if (
+        important_only
+        and
+        not events
+    ):
+
+        await update.message.reply_text(
+            "Среди найденных публикаций "
+            "сейчас нет событий "
+            "высокой важности."
+        )
+
+        return
+
+
+    if ai_failed:
+
+        await update.message.reply_text(
+            "⚠️ AI-обработка временно "
+            "недоступна.\n"
+            "Показываю новости без "
+            "перевода и объединения."
+        )
+
+
+    await send_events(
+        update,
+        events
+    )
+
+
+# ==========================================
+# /START
+# ==========================================
+
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    await update.message.reply_text(
+
+        "👋 Привет!\n\n"
+
+        "Я собираю новости "
+        "из разных источников, "
+        "перевожу их на русский "
+        "и объединяю одинаковые события.\n\n"
+
+        "Выбирай раздел кнопками ниже 👇\n\n"
+
+        "🔥 Главное — "
+        "крупные события\n"
+
+        "📰 Все новости — "
+        "общая лента",
+
+        reply_markup=MAIN_MENU,
+    )
+
+
+# ==========================================
+# /MENU
+# ==========================================
+
+async def menu(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    await update.message.reply_text(
+        "Выбирай раздел 👇",
+        reply_markup=MAIN_MENU,
+    )
+
+
+# ==========================================
+# /NEWS
+# ==========================================
+
+async def news(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    await run_news_request(
+        update
+    )
+
+
+# ==========================================
+# /IMPORTANT
+# ==========================================
+
+async def important(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    await run_news_request(
+        update,
+        important_only=True
+    )
+
+
+# ==========================================
+# КОМАНДЫ СТРАН
+# ==========================================
+
+async def region_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    command = (
+        update.message.text
+        .split()[0]
+        .split("@")[0]
+        .lstrip("/")
+        .lower()
+    )
+
+
+    region = COMMAND_TO_REGION.get(
+        command
+    )
+
+
+    if region:
+
+        await run_news_request(
+            update,
+            region_filter=region
+        )
+
+
+# ==========================================
+# /MANUTD 😈
+# ==========================================
+
+async def manutd(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    await update.message.reply_text(
+        "Муха лох.\n"
+        "Слабый везде."
+    )
+
+
+# ==========================================
+# НАЖАТИЯ НА КНОПКИ
+# ==========================================
+
+async def menu_buttons(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    text = (
+        update.message.text
+        .strip()
+    )
+
+
+    if text == "🔥 Главное":
+
+        await important(
+            update,
+            context
+        )
+
+        return
+
+
+    if text == "📰 Все новости":
+
+        await news(
+            update,
+            context
+        )
+
+        return
+
+
+    region = BUTTON_TO_REGION.get(
+        text
+    )
+
+
+    if region:
+
+        await run_news_request(
+            update,
+            region_filter=region
+        )
+
+        return
+
+
+    await update.message.reply_text(
+        "Выбери раздел "
+        "кнопками ниже 👇",
+        reply_markup=MAIN_MENU,
+    )
+
+
+# ==========================================
+# СПИСОК TELEGRAM-КОМАНД
+# ==========================================
+
+async def post_init(
+    application: Application
+):
+
+    await application.bot.set_my_commands(
+        [
+
+            BotCommand(
+                "news",
+                "Все новости"
+            ),
+
+            BotCommand(
+                "important",
+                "Главные события"
+            ),
+
+            BotCommand(
+                "kz",
+                "Казахстан"
+            ),
+
+            BotCommand(
+                "usa",
+                "США"
+            ),
+
+            BotCommand(
+                "europe",
+                "Европа"
+            ),
+
+            BotCommand(
+                "china",
+                "Китай"
+            ),
+
+            BotCommand(
+                "russia",
+                "Россия"
+            ),
+
+            BotCommand(
+                "world",
+                "Мир"
+            ),
+
+            BotCommand(
+                "ai",
+                "AI и технологии"
+            ),
+
+            BotCommand(
+                "menu",
+                "Показать меню"
+            ),
+        ]
+    )
+
+
+# ==========================================
+# ЗАПУСК
 # ==========================================
 
 def main():
@@ -694,15 +1430,30 @@ def main():
 
     app = (
         Application.builder()
-        .token(telegram_token)
+        .token(
+            telegram_token
+        )
+        .post_init(
+            post_init
+        )
         .build()
     )
 
+
+    # Основные команды
 
     app.add_handler(
         CommandHandler(
             "start",
             start
+        )
+    )
+
+
+    app.add_handler(
+        CommandHandler(
+            "menu",
+            menu
         )
     )
 
@@ -717,8 +1468,45 @@ def main():
 
     app.add_handler(
         CommandHandler(
+            "important",
+            important
+        )
+    )
+
+
+    # Команды стран
+
+    for command in COMMAND_TO_REGION:
+
+        app.add_handler(
+            CommandHandler(
+                command,
+                region_command
+            )
+        )
+
+
+    # Секретная пасхалка 😈
+
+    app.add_handler(
+        CommandHandler(
             "manutd",
             manutd
+        )
+    )
+
+
+    # Кнопки
+
+    app.add_handler(
+
+        MessageHandler(
+
+            filters.TEXT
+            &
+            ~filters.COMMAND,
+
+            menu_buttons
         )
     )
 
@@ -732,4 +1520,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()
