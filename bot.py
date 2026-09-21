@@ -1,5 +1,8 @@
 import os
+import re
+import html
 import threading
+from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import feedparser
@@ -70,11 +73,12 @@ NEWS_FEEDS = {
 }
 
 
+# Эта модель у тебя уже успешно работает
 GEMINI_MODEL = "gemini-3.8-flash"
 
 
 # ==========================================
-# МАЛЕНЬКИЙ WEB-СЕРВЕР ДЛЯ RENDER
+# WEB-СЕРВЕР ДЛЯ RENDER
 # ==========================================
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -102,69 +106,140 @@ def run_web_server():
 
 
 # ==========================================
-# ПЕРЕВОД ВСЕХ ЗАГОЛОВКОВ ЧЕРЕЗ GEMINI
+# ОЧИСТКА RSS-ТЕКСТА
 # ==========================================
 
-def translate_titles(titles):
+def clean_text(text):
+    if not text:
+        return ""
+
+    text = html.unescape(str(text))
+
+    text = re.sub(
+        r"<[^>]+>",
+        " ",
+        text
+    )
+
+    text = " ".join(
+        text.replace("\n", " ").split()
+    )
+
+    return text
+
+
+# ==========================================
+# GEMINI
+# ПЕРЕВОД + КРАТКО + ОБЪЕДИНЕНИЕ ДУБЛЕЙ
+# ==========================================
+
+def process_articles_with_gemini(articles):
     api_key = os.environ.get("GEMINI_API_KEY")
 
     if not api_key:
         print("GEMINI_API_KEY missing")
-        return titles
-
-    if not titles:
-        return []
+        return None
 
     url = (
         "https://generativelanguage.googleapis.com/v1beta/"
         f"models/{GEMINI_MODEL}:generateContent"
     )
 
-    # Убираем переносы строк внутри заголовков,
-    # чтобы Gemini было проще вернуть правильный формат.
-    clean_titles = []
+    article_lines = []
 
-    for title in titles:
-        clean_title = " ".join(
-            str(title).replace("\n", " ").split()
+    for index, article in enumerate(articles):
+
+        title = clean_text(
+            article["title"]
         )
-        clean_titles.append(clean_title)
 
-    numbered_titles = "\n".join(
-        f"NEWS_{index}|||{title}"
-        for index, title in enumerate(clean_titles)
+        description = clean_text(
+            article.get(
+                "description",
+                ""
+            )
+        )
+
+        # Не отправляем слишком длинные тексты
+        description = description[:700]
+
+        article_lines.append(
+            f"""
+NEWS_{index}
+REGION: {article['region']}
+SOURCE: {article['source']}
+TITLE: {title}
+DESCRIPTION: {description}
+""".strip()
+        )
+
+    articles_text = "\n\n".join(
+        article_lines
     )
 
     prompt = f"""
-Ты профессиональный переводчик новостей.
+Ты работаешь как редактор русскоязычного новостного агрегатора.
 
-Переведи ВСЕ заголовки ниже на естественный русский язык.
+Перед тобой публикации разных СМИ.
 
-СТРОГИЕ ПРАВИЛА:
+Для КАЖДОЙ публикации:
 
-1. Ничего не выдумывай.
-2. Не добавляй фактов, которых нет в оригинале.
-3. Не сокращай важные детали.
-4. Точно сохраняй имена людей, компаний, стран, даты и числа.
-5. Английские и китайские заголовки обязательно переводи на русский.
-6. Даже если заголовок уже на русском — просто оставь его нормальным русским текстом.
-7. Каждый перевод должен занимать ОДНУ строку.
-8. Сохрани идентификатор NEWS_ перед каждой строкой.
-9. Между идентификатором и переводом обязательно оставь |||.
-10. Не используй Markdown.
-11. Не используй ```json.
-12. Не пиши никаких объяснений.
-13. Верни ТОЛЬКО строки с переводами.
+1. Переведи заголовок на естественный русский язык.
 
-Пример:
+2. Напиши краткое описание новости на русском:
+максимум 1–2 коротких предложения.
 
-NEWS_0|||Первый заголовок на русском
-NEWS_1|||Второй заголовок на русском
-NEWS_2|||Третий заголовок на русском
+3. Используй ТОЛЬКО информацию из TITLE и DESCRIPTION.
+Ничего не выдумывай.
 
-Вот заголовки:
+4. Сохраняй точно:
+имена людей,
+названия компаний,
+страны,
+даты,
+суммы,
+проценты
+и другие числа.
 
-{numbered_titles}
+5. Если две или несколько публикаций описывают
+одно и то же КОНКРЕТНОЕ событие,
+дай им одинаковый EVENT_ID.
+
+6. Если публикации просто относятся к похожей теме,
+но события разные — EVENT_ID должен быть разным.
+
+7. Если сомневаешься, объединять ли публикации,
+НЕ объединяй их.
+
+8. Для публикаций об одном событии
+используй максимально похожий русский заголовок
+и одинаковую суть.
+
+9. Не представляй мнение, обвинение,
+предположение или заявление источника
+как установленный факт.
+
+Верни РОВНО по одной строке для каждого NEWS_.
+
+Формат строго такой:
+
+NEWS_0|||EVENT_1|||РУССКИЙ ЗАГОЛОВОК|||КРАТКОЕ ОПИСАНИЕ
+NEWS_1|||EVENT_2|||РУССКИЙ ЗАГОЛОВОК|||КРАТКОЕ ОПИСАНИЕ
+
+Если NEWS_2 и NEWS_3 говорят об одном событии:
+
+NEWS_2|||EVENT_3|||РУССКИЙ ЗАГОЛОВОК|||КРАТКОЕ ОПИСАНИЕ
+NEWS_3|||EVENT_3|||РУССКИЙ ЗАГОЛОВОК|||КРАТКОЕ ОПИСАНИЕ
+
+Не используй Markdown.
+Не используй JSON.
+Не используй ``` .
+Не пиши объяснений.
+Не пропускай NEWS_.
+
+Вот публикации:
+
+{articles_text}
 """
 
     try:
@@ -186,38 +261,41 @@ NEWS_2|||Третий заголовок на русском
                 ],
                 "generationConfig": {
                     "temperature": 0.1,
-                    "maxOutputTokens": 3000
+                    "maxOutputTokens": 5000
                 }
             },
-            timeout=60,
+            timeout=90,
         )
 
         if response.status_code != 200:
+
             print(
                 "Gemini HTTP error:",
                 response.status_code,
-                response.text[:1500]
+                response.text[:2000]
             )
 
-            return titles
+            return None
 
         data = response.json()
 
-        candidates = data.get("candidates", [])
+        candidates = data.get(
+            "candidates",
+            []
+        )
 
         if not candidates:
-            print("Gemini returned no candidates")
-            return titles
+            print(
+                "Gemini returned no candidates"
+            )
+
+            return None
 
         parts = (
             candidates[0]
             .get("content", {})
             .get("parts", [])
         )
-
-        if not parts:
-            print("Gemini returned no text")
-            return titles
 
         raw_text = "\n".join(
             part.get("text", "")
@@ -226,70 +304,114 @@ NEWS_2|||Третий заголовок на русском
         ).strip()
 
         print(
-            "Gemini translation response:",
-            raw_text[:2000]
+            "Gemini processed articles:",
+            raw_text[:3000]
         )
 
-        translations = {}
+        processed = {}
 
         for line in raw_text.splitlines():
+
             line = line.strip()
 
-            if "|||" not in line:
+            if not line.startswith(
+                "NEWS_"
+            ):
                 continue
 
-            identifier, translated = line.split(
+            pieces = line.split(
                 "|||",
-                1
+                3
             )
 
-            identifier = identifier.strip()
-            translated = translated.strip()
-
-            if not identifier.startswith("NEWS_"):
+            if len(pieces) != 4:
                 continue
+
+            news_id = pieces[0].strip()
+            event_id = pieces[1].strip()
+            title_ru = pieces[2].strip()
+            summary_ru = pieces[3].strip()
 
             try:
                 index = int(
-                    identifier.replace(
+                    news_id.replace(
                         "NEWS_",
                         ""
                     )
                 )
+
             except ValueError:
                 continue
 
-            if translated:
-                translations[index] = translated
+            processed[index] = {
+                "event_id": event_id,
+                "title_ru": title_ru,
+                "summary_ru": summary_ru,
+            }
 
-        result = []
-
-        for index, original_title in enumerate(titles):
-
-            translated_title = translations.get(
-                index
-            )
-
-            if translated_title:
-                result.append(
-                    translated_title
-                )
-            else:
-                # Если конкретно одна строка не распозналась,
-                # остальные переводы всё равно сохраняются.
-                result.append(
-                    original_title
-                )
-
-        return result
+        return processed
 
     except Exception as error:
+
         print(
-            "Gemini exception:",
+            "Gemini processing exception:",
             repr(error)
         )
 
-        return titles
+        return None
+
+
+# ==========================================
+# ОБЪЕДИНЕНИЕ ОДИНАКОВЫХ СОБЫТИЙ
+# ==========================================
+
+def group_articles(
+    articles,
+    processed
+):
+    events = OrderedDict()
+
+    for index, article in enumerate(
+        articles
+    ):
+
+        gemini_data = processed.get(
+            index,
+            {}
+        )
+
+        event_id = gemini_data.get(
+            "event_id",
+            f"FALLBACK_{index}"
+        )
+
+        title_ru = gemini_data.get(
+            "title_ru",
+            article["title"]
+        )
+
+        summary_ru = gemini_data.get(
+            "summary_ru",
+            ""
+        )
+
+        if event_id not in events:
+
+            events[event_id] = {
+                "region": article["region"],
+                "title": title_ru,
+                "summary": summary_ru,
+                "sources": []
+            }
+
+        events[event_id]["sources"].append({
+            "name": article["source"],
+            "link": article["link"]
+        })
+
+    return list(
+        events.values()
+    )
 
 
 # ==========================================
@@ -302,8 +424,22 @@ async def start(
 ):
     await update.message.reply_text(
         "👋 Привет!\n\n"
-        "Я собираю свежие новости и перевожу их на русский.\n\n"
-        "📰 /news — получить последние новости"
+        "Я собираю свежие новости из разных источников, "
+        "перевожу их на русский и объединяю одинаковые события.\n\n"
+        "📰 /news — получить свежие новости"
+    )
+
+
+# ==========================================
+# ПАСХАЛКА /MANUTD 😈
+# ==========================================
+
+async def manutd(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    await update.message.reply_text(
+        "Муха Лох! 😂"
     )
 
 
@@ -315,10 +451,14 @@ async def news(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
-    status_message = await update.message.reply_text(
-        "🔎 Собираю свежие новости...\n"
-        "🌍 Проверяю источники\n"
-        "🇷🇺 Перевожу на русский"
+
+    status_message = (
+        await update.message.reply_text(
+            "🔎 Собираю новости...\n"
+            "🌍 Проверяю источники\n"
+            "🇷🇺 Перевожу на русский\n"
+            "🧠 Ищу одинаковые события"
+        )
     )
 
     articles = []
@@ -326,19 +466,35 @@ async def news(
     for category, url in NEWS_FEEDS.items():
 
         try:
-            feed = feedparser.parse(url)
+            feed = feedparser.parse(
+                url
+            )
 
             if not feed.entries:
+
                 print(
                     f"No articles from: {category}"
                 )
+
                 continue
 
             article = feed.entries[0]
 
-            title = article.get(
-                "title",
-                ""
+            title = clean_text(
+                article.get(
+                    "title",
+                    ""
+                )
+            )
+
+            description = clean_text(
+                article.get(
+                    "summary",
+                    article.get(
+                        "description",
+                        ""
+                    )
+                )
             )
 
             link = article.get(
@@ -346,22 +502,34 @@ async def news(
                 ""
             )
 
-            source_name = feed.feed.get(
-                "title",
-                category.split("•")[-1].strip()
+            source_name = (
+                feed.feed.get(
+                    "title",
+                    category
+                    .split("•")[-1]
+                    .strip()
+                )
             )
 
             if not title:
                 continue
 
+            region = (
+                category
+                .split("•")[0]
+                .strip()
+            )
+
             articles.append({
-                "category": category,
+                "region": region,
                 "title": title,
+                "description": description,
                 "link": link,
                 "source": source_name,
             })
 
         except Exception as error:
+
             print(
                 f"RSS error {category}:",
                 repr(error)
@@ -369,48 +537,138 @@ async def news(
 
 
     if not articles:
+
         await status_message.edit_text(
             "❌ Сейчас не удалось получить новости."
         )
+
         return
 
 
-    original_titles = [
-        article["title"]
-        for article in articles
-    ]
+    processed = (
+        process_articles_with_gemini(
+            articles
+        )
+    )
 
 
-    translated_titles = translate_titles(
-        original_titles
+    if processed is None:
+
+        await status_message.edit_text(
+            "⚠️ Новости получены, "
+            "но Gemini сейчас не смог их обработать."
+        )
+
+        return
+
+
+    events = group_articles(
+        articles,
+        processed
     )
 
 
     try:
         await status_message.delete()
+
     except Exception:
         pass
 
 
-    for article, russian_title in zip(
-        articles,
-        translated_titles
-    ):
+    await update.message.reply_text(
+        f"📰 Публикаций найдено: {len(articles)}\n"
+        f"🧠 Отдельных событий: {len(events)}"
+    )
+
+
+    for event in events:
+
+        unique_sources = []
+        seen_links = set()
+
+        for source in event["sources"]:
+
+            link = source["link"]
+
+            if link in seen_links:
+                continue
+
+            seen_links.add(
+                link
+            )
+
+            unique_sources.append(
+                source
+            )
+
+
+        source_names = []
+
+        for source in unique_sources:
+
+            if (
+                source["name"]
+                not in source_names
+            ):
+                source_names.append(
+                    source["name"]
+                )
+
+
+        if len(source_names) == 1:
+
+            sources_text = (
+                f"🗞 Источник: "
+                f"{source_names[0]}"
+            )
+
+        else:
+
+            sources_text = (
+                f"🗞 Источников: "
+                f"{len(source_names)} — "
+                + " • ".join(
+                    source_names
+                )
+            )
+
 
         message = (
-            f"{article['category']}\n\n"
-            f"📰 {russian_title}\n\n"
-            f"🗞 {article['source']}\n"
-            f"🔗 {article['link']}"
+            f"{event['region']}\n\n"
+            f"📰 {event['title']}\n"
         )
 
+
+        if event["summary"]:
+
+            message += (
+                f"\nКоротко: "
+                f"{event['summary']}\n"
+            )
+
+
+        message += (
+            f"\n{sources_text}\n"
+        )
+
+
+        for source in unique_sources:
+
+            message += (
+                f"\n🔗 {source['name']}: "
+                f"{source['link']}"
+            )
+
+
         try:
+
             await update.message.reply_text(
                 message,
                 disable_web_page_preview=True
             )
 
         except Exception as error:
+
             print(
                 "Telegram send error:",
                 repr(error)
@@ -428,15 +686,18 @@ def main():
         daemon=True
     ).start()
 
+
     telegram_token = os.environ[
         "TELEGRAM_BOT_TOKEN"
     ]
+
 
     app = (
         Application.builder()
         .token(telegram_token)
         .build()
     )
+
 
     app.add_handler(
         CommandHandler(
@@ -445,6 +706,7 @@ def main():
         )
     )
 
+
     app.add_handler(
         CommandHandler(
             "news",
@@ -452,7 +714,19 @@ def main():
         )
     )
 
-    print("Telegram bot started")
+
+    app.add_handler(
+        CommandHandler(
+            "manutd",
+            manutd
+        )
+    )
+
+
+    print(
+        "Telegram bot started"
+    )
+
 
     app.run_polling()
 
