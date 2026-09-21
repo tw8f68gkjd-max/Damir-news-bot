@@ -28,7 +28,7 @@ from telegram.ext import (
 # AI
 # =========================================================
 
-GROQ_MODEL = "qwen/qwen3.6-27b"
+GROQ_MODEL = "openai/gpt-oss-20b"
 GEMINI_MODEL = "gemini-3.8-flash"
 
 
