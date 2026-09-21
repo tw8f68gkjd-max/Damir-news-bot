@@ -10,10 +10,60 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 
 NEWS_FEEDS = {
-    "🌍 Мир": "https://subscribe.stripes.com/rss/top-news.xml",
-    "🇺🇸 США": "https://subscribe.stripes.com/rss/us.xml",
-    "🇪🇺 Европа": "https://subscribe.stripes.com/rss/europe.xml",
-    "🇨🇳 Китай": "https://www.chinanews.com.cn/rss/china.xml",
+    # 🇰🇿 КАЗАХСТАН
+    "🇰🇿 Казахстан • Kazinform":
+        "https://qazinform.com/rss/en.xml",
+
+    "🇰🇿 Казахстан • The Astana Times":
+        "https://astanatimes.com/feed/",
+
+
+    # 🇺🇸 США
+    "🇺🇸 США • NPR":
+        "https://feeds.npr.org/1003/rss.xml",
+
+    "🇺🇸 США • BBC":
+        "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml",
+
+
+    # 🇪🇺 ЕВРОПА
+    "🇪🇺 Европа • Euronews":
+        "https://euronews.com/rss?format=mrss&level=vertical&name=my-europe",
+
+    "🇪🇺 Европа • BBC":
+        "https://feeds.bbci.co.uk/news/world/europe/rss.xml",
+
+
+    # 🇨🇳 КИТАЙ
+    "🇨🇳 Китай • China News Service":
+        "https://www.chinanews.com.cn/rss/china.xml",
+
+    "🇨🇳 Китай • BBC":
+        "https://feeds.bbci.co.uk/news/world/asia/china/rss.xml",
+
+
+    # 🇷🇺 РОССИЯ
+    "🇷🇺 Россия • Интерфакс":
+        "https://www.interfax.ru/rss.asp",
+
+    "🇷🇺 Россия • Meduza":
+        "https://meduza.io/rss2/all",
+
+
+    # 🌍 МИР
+    "🌍 Мир • Euronews":
+        "https://www.euronews.com/rss?format=mrss&level=theme&name=news",
+
+    "🌍 Мир • BBC":
+        "https://feeds.bbci.co.uk/news/world/rss.xml",
+
+
+    # 🤖 AI / ТЕХНОЛОГИИ
+    "🤖 AI • TechCrunch":
+        "https://techcrunch.com/category/artificial-intelligence/feed/",
+
+    "🤖 AI / технологии • The Verge":
+        "https://www.theverge.com/rss/index.xml",
 }
 
 GEMINI_MODEL = "gemini-3.8-flash"
