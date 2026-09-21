@@ -2,8 +2,18 @@ import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+import feedparser
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+
+
+# Первые источники для теста
+NEWS_FEEDS = {
+    "🌍 Мир": "https://subscribe.stripes.com/rss/top-news.xml",
+    "🇺🇸 США": "https://subscribe.stripes.com/rss/us.xml",
+    "🇪🇺 Европа": "https://subscribe.stripes.com/rss/europe.xml",
+    "🇨🇳 Китай": "https://www.chinanews.com.cn/rss/china.xml",
+}
 
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -27,8 +37,39 @@ def run_web_server():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Я работаю.\n\n"
-        "Скоро здесь будут новости в реальном времени 🌍"
+        "Команда /news — последние новости 🌍"
     )
+
+
+async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔎 Собираю свежие новости...")
+
+    found = 0
+
+    for category, url in NEWS_FEEDS.items():
+        feed = feedparser.parse(url)
+
+        if not feed.entries:
+            continue
+
+        article = feed.entries[0]
+
+        title = article.get("title", "Без заголовка")
+        link = article.get("link", "")
+
+        message = (
+            f"{category}\n\n"
+            f"📰 {title}\n\n"
+            f"🔗 {link}"
+        )
+
+        await update.message.reply_text(message)
+        found += 1
+
+    if found == 0:
+        await update.message.reply_text(
+            "Не удалось получить новости. Попробуй позже."
+        )
 
 
 def main():
@@ -37,7 +78,9 @@ def main():
     token = os.environ["TELEGRAM_BOT_TOKEN"]
 
     app = Application.builder().token(token).build()
+
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("news", news))
 
     print("Telegram bot started")
     app.run_polling()
