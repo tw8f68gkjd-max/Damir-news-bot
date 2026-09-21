@@ -1,13 +1,20 @@
 import os
 import re
 import html
+import time
 import threading
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import feedparser
 import requests
-from telegram import Update, ReplyKeyboardMarkup, BotCommand
+
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    BotCommand,
+)
+
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -17,12 +24,17 @@ from telegram.ext import (
 )
 
 
-# ==========================================
-# НАСТРОЙКИ
-# ==========================================
+# =========================================================
+# AI
+# =========================================================
 
+GROQ_MODEL = "qwen/qwen3.6-27b"
 GEMINI_MODEL = "gemini-3.8-flash"
 
+
+# =========================================================
+# ИСТОЧНИКИ НОВОСТЕЙ
+# =========================================================
 
 NEWS_FEEDS = [
 
@@ -30,13 +42,13 @@ NEWS_FEEDS = [
     {
         "region": "🇰🇿 Казахстан",
         "source": "Kazinform",
-        "url": "https://qazinform.com/rss/en.xml"
+        "url": "https://qazinform.com/rss/en.xml",
     },
 
     {
         "region": "🇰🇿 Казахстан",
         "source": "The Astana Times",
-        "url": "https://astanatimes.com/feed/"
+        "url": "https://astanatimes.com/feed/",
     },
 
 
@@ -44,13 +56,13 @@ NEWS_FEEDS = [
     {
         "region": "🇺🇸 США",
         "source": "NPR",
-        "url": "https://feeds.npr.org/1003/rss.xml"
+        "url": "https://feeds.npr.org/1003/rss.xml",
     },
 
     {
         "region": "🇺🇸 США",
         "source": "BBC",
-        "url": "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml"
+        "url": "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml",
     },
 
 
@@ -58,13 +70,13 @@ NEWS_FEEDS = [
     {
         "region": "🇪🇺 Европа",
         "source": "Euronews",
-        "url": "https://euronews.com/rss?format=mrss&level=vertical&name=my-europe"
+        "url": "https://euronews.com/rss?format=mrss&level=vertical&name=my-europe",
     },
 
     {
         "region": "🇪🇺 Европа",
         "source": "BBC",
-        "url": "https://feeds.bbci.co.uk/news/world/europe/rss.xml"
+        "url": "https://feeds.bbci.co.uk/news/world/europe/rss.xml",
     },
 
 
@@ -72,13 +84,13 @@ NEWS_FEEDS = [
     {
         "region": "🇨🇳 Китай",
         "source": "China News Service",
-        "url": "https://www.chinanews.com.cn/rss/china.xml"
+        "url": "https://www.chinanews.com.cn/rss/china.xml",
     },
 
     {
         "region": "🇨🇳 Китай",
         "source": "BBC",
-        "url": "https://feeds.bbci.co.uk/news/world/asia/china/rss.xml"
+        "url": "https://feeds.bbci.co.uk/news/world/asia/china/rss.xml",
     },
 
 
@@ -86,13 +98,13 @@ NEWS_FEEDS = [
     {
         "region": "🇷🇺 Россия",
         "source": "Интерфакс",
-        "url": "https://www.interfax.ru/rss.asp"
+        "url": "https://www.interfax.ru/rss.asp",
     },
 
     {
         "region": "🇷🇺 Россия",
         "source": "Meduza",
-        "url": "https://meduza.io/rss2/all"
+        "url": "https://meduza.io/rss2/all",
     },
 
 
@@ -100,13 +112,13 @@ NEWS_FEEDS = [
     {
         "region": "🌍 Мир",
         "source": "Euronews",
-        "url": "https://www.euronews.com/rss?format=mrss&level=theme&name=news"
+        "url": "https://www.euronews.com/rss?format=mrss&level=theme&name=news",
     },
 
     {
         "region": "🌍 Мир",
         "source": "BBC",
-        "url": "https://feeds.bbci.co.uk/news/world/rss.xml"
+        "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
     },
 
 
@@ -114,20 +126,20 @@ NEWS_FEEDS = [
     {
         "region": "🤖 AI / технологии",
         "source": "TechCrunch",
-        "url": "https://techcrunch.com/category/artificial-intelligence/feed/"
+        "url": "https://techcrunch.com/category/artificial-intelligence/feed/",
     },
 
     {
         "region": "🤖 AI / технологии",
         "source": "The Verge",
-        "url": "https://www.theverge.com/rss/index.xml"
+        "url": "https://www.theverge.com/rss/index.xml",
     },
 ]
 
 
-# ==========================================
-# КНОПКИ
-# ==========================================
+# =========================================================
+# МЕНЮ
+# =========================================================
 
 MAIN_MENU = ReplyKeyboardMarkup(
     [
@@ -170,27 +182,22 @@ IMPACT_RANK = {
 }
 
 
-# ==========================================
-# WEB-СЕРВЕР ДЛЯ RENDER
-# ==========================================
+# =========================================================
+# WEB SERVER ДЛЯ RENDER
+# =========================================================
 
 class HealthHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
-
         self.send_response(200)
-
         self.send_header(
             "Content-type",
-            "text/plain"
+            "text/plain",
         )
-
         self.end_headers()
-
         self.wfile.write(
             b"Bot is running"
         )
-
 
     def log_message(
         self,
@@ -211,7 +218,7 @@ def run_web_server():
 
     server = HTTPServer(
         ("0.0.0.0", port),
-        HealthHandler
+        HealthHandler,
     )
 
     print(
@@ -221,9 +228,9 @@ def run_web_server():
     server.serve_forever()
 
 
-# ==========================================
+# =========================================================
 # ОЧИСТКА ТЕКСТА
-# ==========================================
+# =========================================================
 
 def clean_text(text):
 
@@ -237,7 +244,7 @@ def clean_text(text):
     text = re.sub(
         r"<[^>]+>",
         " ",
-        text
+        text,
     )
 
     text = " ".join(
@@ -249,9 +256,9 @@ def clean_text(text):
     return text
 
 
-# ==========================================
-# ПОЛУЧЕНИЕ НОВОСТЕЙ
-# ==========================================
+# =========================================================
+# ЗАГРУЗКА RSS
+# =========================================================
 
 def collect_articles(
     region_filter=None
@@ -259,17 +266,14 @@ def collect_articles(
 
     articles = []
 
-
     for feed_info in NEWS_FEEDS:
 
         if (
             region_filter
             and
-            feed_info["region"]
-            != region_filter
+            feed_info["region"] != region_filter
         ):
             continue
-
 
         try:
 
@@ -282,27 +286,22 @@ def collect_articles(
                 timeout=15,
             )
 
-
             response.raise_for_status()
-
 
             feed = feedparser.parse(
                 response.content
             )
 
-
             if not feed.entries:
 
                 print(
                     "No articles from:",
-                    feed_info["source"]
+                    feed_info["source"],
                 )
 
                 continue
 
-
             article = feed.entries[0]
-
 
             title = clean_text(
                 article.get(
@@ -310,7 +309,6 @@ def collect_articles(
                     ""
                 )
             )
-
 
             description = clean_text(
                 article.get(
@@ -322,19 +320,15 @@ def collect_articles(
                 )
             )
 
-
             link = article.get(
                 "link",
                 ""
             )
 
-
             if not title:
                 continue
 
-
             articles.append({
-
                 "region":
                     feed_info["region"],
 
@@ -351,50 +345,24 @@ def collect_articles(
                     link,
             })
 
-
         except Exception as error:
 
             print(
                 f"RSS error "
                 f"{feed_info['source']}:",
-                repr(error)
+                repr(error),
             )
-
 
     return articles
 
 
-# ==========================================
-# GEMINI
-# перевод + описание + дубли + важность
-# ==========================================
+# =========================================================
+# СОЗДАЁМ PROMPT ДЛЯ AI
+# =========================================================
 
-def process_articles_with_gemini(
-    articles
-):
-
-    api_key = os.environ.get(
-        "GEMINI_API_KEY"
-    )
-
-
-    if not api_key:
-
-        print(
-            "GEMINI_API_KEY missing"
-        )
-
-        return None
-
-
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/"
-        f"models/{GEMINI_MODEL}:generateContent"
-    )
-
+def make_ai_prompt(articles):
 
     blocks = []
-
 
     for index, article in enumerate(
         articles
@@ -407,7 +375,6 @@ def process_articles_with_gemini(
             )
         )[:700]
 
-
         blocks.append(
             f"""
 NEWS_{index}
@@ -418,102 +385,74 @@ DESCRIPTION: {description}
 """.strip()
         )
 
-
     articles_text = "\n\n".join(
         blocks
     )
 
-
-    prompt = f"""
+    return f"""
 Ты редактор русскоязычного новостного агрегатора.
 
-Обработай каждую публикацию ниже.
+Обработай КАЖДУЮ публикацию ниже.
 
-Для каждой NEWS_:
+Для каждого NEWS_:
 
 1. Переведи заголовок на естественный русский язык.
 
-2. Сделай короткое описание:
+2. Напиши короткое описание события:
 максимум 1–2 предложения.
 
-3. Используй только информацию
-из TITLE и DESCRIPTION.
-
+3. Используй только информацию из TITLE и DESCRIPTION.
 Ничего не выдумывай.
 
-4. Точно сохраняй:
-имена,
-названия компаний,
-страны,
-даты,
-суммы,
-проценты
-и числа.
+4. Точно сохраняй имена людей, компании, страны,
+даты, суммы, проценты и другие числа.
 
-5. Если несколько публикаций
-описывают одно и то же КОНКРЕТНОЕ событие,
-дай им одинаковый EVENT_ID.
+5. Если несколько публикаций описывают одно и то же
+КОНКРЕТНОЕ событие, присвой им одинаковый EVENT_ID.
 
-6. Если тема похожа,
-но события разные,
+6. Если это похожая тема, но разные события,
 EVENT_ID должен быть разным.
 
-7. Если сомневаешься —
-НЕ объединяй.
+7. Если сомневаешься — НЕ объединяй события.
 
 8. Определи масштаб события:
 
 HIGH =
-крупное событие с широким
-международным или национальным влиянием,
+крупное событие с широким национальным
+или международным значением,
 серьёзной угрозой безопасности,
-значительным экономическим эффектом
-или важным решением государственных
+существенным экономическим эффектом
+или значимым решением государственных
 или международных институтов.
 
 MEDIUM =
-заметное событие,
-но более ограниченного масштаба.
+заметное событие более ограниченного масштаба.
 
 LOW =
-локальная,
-узкая
-или нишевая новость.
+локальная, узкая или нишевая новость.
 
-Не повышай важность
-из-за политической позиции,
-эмоционального тона
-или мнения конкретного СМИ.
+Не повышай важность из-за эмоционального заголовка,
+политической позиции или мнения СМИ.
 
-9. Не представляй
-заявление,
-обвинение,
-мнение,
-предположение
-или прогноз
-как установленный факт.
+9. Не представляй заявление, обвинение,
+предположение или прогноз как установленный факт.
 
+Верни РОВНО одну строку для каждого NEWS_.
 
-Формат каждой строки СТРОГО:
+Формат строго:
 
 NEWS_0|||EVENT_1|||HIGH|||РУССКИЙ ЗАГОЛОВОК|||КРАТКОЕ ОПИСАНИЕ
 
-
-Разрешённые уровни:
+Допустимые уровни:
 
 HIGH
 MEDIUM
 LOW
 
-
-Верни ровно одну строку
-для каждого NEWS_.
-
 Не используй Markdown.
 Не используй JSON.
-Не пиши пояснений.
+Не пиши никаких объяснений.
 Не пропускай NEWS_.
-
 
 Публикации:
 
@@ -521,35 +460,174 @@ LOW
 """
 
 
+# =========================================================
+# GROQ — ОСНОВНОЙ AI
+# =========================================================
+
+def call_groq(prompt):
+
+    api_key = os.environ.get(
+        "GROQ_API_KEY"
+    )
+
+    if not api_key:
+
+        print(
+            "GROQ_API_KEY missing"
+        )
+
+        return None
+
+    url = (
+        "https://api.groq.com/"
+        "openai/v1/chat/completions"
+    )
+
+    # Две попытки
+    for attempt in range(2):
+
+        try:
+
+            response = requests.post(
+                url,
+                headers={
+                    "Authorization":
+                        f"Bearer {api_key}",
+
+                    "Content-Type":
+                        "application/json",
+                },
+                json={
+                    "model":
+                        GROQ_MODEL,
+
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content":
+                                "Ты точный редактор "
+                                "и переводчик новостей."
+                        },
+                        {
+                            "role": "user",
+                            "content": prompt,
+                        },
+                    ],
+
+                    "temperature": 0.1,
+
+                    "max_completion_tokens":
+                        6000,
+
+                    # Для Qwen убираем
+                    # лишние reasoning-токены.
+                    "reasoning_effort":
+                        "none",
+                },
+                timeout=60,
+            )
+
+            if response.status_code == 200:
+
+                data = response.json()
+
+                text = (
+                    data["choices"][0]
+                    ["message"]["content"]
+                )
+
+                if text:
+
+                    print(
+                        "AI provider: GROQ"
+                    )
+
+                    return text.strip()
+
+            print(
+                "Groq error:",
+                response.status_code,
+                response.text[:1000],
+            )
+
+            # На rate limit / серверных ошибках
+            # пробуем ещё раз.
+            if (
+                response.status_code == 429
+                or
+                response.status_code >= 500
+            ):
+
+                time.sleep(
+                    2 + attempt * 2
+                )
+
+                continue
+
+            break
+
+        except Exception as error:
+
+            print(
+                "Groq exception:",
+                repr(error),
+            )
+
+            time.sleep(
+                2 + attempt * 2
+            )
+
+    return None
+
+
+# =========================================================
+# GEMINI — РЕЗЕРВ
+# =========================================================
+
+def call_gemini(prompt):
+
+    api_key = os.environ.get(
+        "GEMINI_API_KEY"
+    )
+
+    if not api_key:
+
+        print(
+            "GEMINI_API_KEY missing"
+        )
+
+        return None
+
+    url = (
+        "https://generativelanguage.googleapis.com/"
+        "v1beta/models/"
+        f"{GEMINI_MODEL}:generateContent"
+    )
+
     try:
 
         response = requests.post(
-
             url,
-
             headers={
                 "Content-Type":
-                "application/json",
+                    "application/json",
 
                 "x-goog-api-key":
-                api_key,
+                    api_key,
             },
-
-
             json={
                 "contents": [
                     {
                         "parts": [
                             {
                                 "text":
-                                prompt
+                                    prompt
                             }
                         ]
                     }
                 ],
 
                 "generationConfig": {
-
                     "temperature":
                         0.1,
 
@@ -557,40 +635,29 @@ LOW
                         6000,
                 },
             },
-
-
-            timeout=90,
+            timeout=70,
         )
-
 
         if response.status_code != 200:
 
             print(
-                "Gemini HTTP error:",
+                "Gemini error:",
                 response.status_code,
-                response.text[:2000]
+                response.text[:1000],
             )
 
             return None
 
-
         data = response.json()
-
 
         candidates = data.get(
             "candidates",
             []
         )
 
-
         if not candidates:
 
-            print(
-                "Gemini returned no candidates"
-            )
-
             return None
-
 
         parts = (
             candidates[0]
@@ -598,9 +665,7 @@ LOW
             .get("parts", [])
         )
 
-
-        raw_text = "\n".join(
-
+        text = "\n".join(
             part.get(
                 "text",
                 ""
@@ -611,119 +676,201 @@ LOW
             if part.get(
                 "text"
             )
-
         ).strip()
 
+        if text:
 
-        print(
-            "Gemini processed articles:",
-            raw_text[:3000]
-        )
-
-
-        processed = {}
-
-
-        for line in raw_text.splitlines():
-
-            line = line.strip()
-
-
-            if not line.startswith(
-                "NEWS_"
-            ):
-                continue
-
-
-            pieces = line.split(
-                "|||",
-                4
+            print(
+                "AI provider: GEMINI FALLBACK"
             )
 
-
-            if len(pieces) != 5:
-                continue
-
-
-            news_id = (
-                pieces[0]
-                .strip()
-            )
-
-            event_id = (
-                pieces[1]
-                .strip()
-            )
-
-            impact = (
-                pieces[2]
-                .strip()
-                .upper()
-            )
-
-            title_ru = (
-                pieces[3]
-                .strip()
-            )
-
-            summary_ru = (
-                pieces[4]
-                .strip()
-            )
-
-
-            try:
-
-                index = int(
-                    news_id.replace(
-                        "NEWS_",
-                        ""
-                    )
-                )
-
-
-            except ValueError:
-
-                continue
-
-
-            if impact not in IMPACT_RANK:
-
-                impact = "MEDIUM"
-
-
-            processed[index] = {
-
-                "event_id":
-                    event_id,
-
-                "impact":
-                    impact,
-
-                "title_ru":
-                    title_ru,
-
-                "summary_ru":
-                    summary_ru,
-            }
-
-
-        return processed
-
+            return text
 
     except Exception as error:
 
         print(
-            "Gemini processing exception:",
-            repr(error)
+            "Gemini exception:",
+            repr(error),
         )
 
-        return None
+    return None
 
 
-# ==========================================
-# РЕЗЕРВНЫЙ РЕЖИМ
-# ==========================================
+# =========================================================
+# ЧИТАЕМ ОТВЕТ AI
+# =========================================================
+
+def parse_ai_response(
+    raw_text,
+    article_count
+):
+
+    processed = {}
+
+    if not raw_text:
+        return processed
+
+    for line in raw_text.splitlines():
+
+        line = line.strip()
+
+        if not line.startswith(
+            "NEWS_"
+        ):
+            continue
+
+        pieces = line.split(
+            "|||",
+            4
+        )
+
+        if len(pieces) != 5:
+            continue
+
+        news_id = (
+            pieces[0].strip()
+        )
+
+        event_id = (
+            pieces[1].strip()
+        )
+
+        impact = (
+            pieces[2]
+            .strip()
+            .upper()
+        )
+
+        title_ru = (
+            pieces[3].strip()
+        )
+
+        summary_ru = (
+            pieces[4].strip()
+        )
+
+        try:
+
+            index = int(
+                news_id.replace(
+                    "NEWS_",
+                    ""
+                )
+            )
+
+        except ValueError:
+
+            continue
+
+        if not (
+            0 <= index < article_count
+        ):
+
+            continue
+
+        if impact not in IMPACT_RANK:
+
+            impact = "MEDIUM"
+
+        processed[index] = {
+            "event_id":
+                event_id,
+
+            "impact":
+                impact,
+
+            "title_ru":
+                title_ru,
+
+            "summary_ru":
+                summary_ru,
+        }
+
+    return processed
+
+
+# =========================================================
+# GROQ -> GEMINI
+# =========================================================
+
+def process_articles_with_ai(
+    articles
+):
+
+    prompt = make_ai_prompt(
+        articles
+    )
+
+    # 1. GROQ
+    groq_text = call_groq(
+        prompt
+    )
+
+    groq_result = parse_ai_response(
+        groq_text,
+        len(articles),
+    )
+
+    # Если Groq обработал всё —
+    # Gemini вообще не тратим.
+    if (
+        len(groq_result)
+        ==
+        len(articles)
+    ):
+
+        return groq_result, "Groq"
+
+
+    if groq_text:
+
+        print(
+            "Groq returned partial result:",
+            len(groq_result),
+            "/",
+            len(articles),
+        )
+
+
+    # 2. GEMINI FALLBACK
+    gemini_text = call_gemini(
+        prompt
+    )
+
+    gemini_result = parse_ai_response(
+        gemini_text,
+        len(articles),
+    )
+
+
+    if (
+        len(gemini_result)
+        >=
+        len(groq_result)
+        and
+        gemini_result
+    ):
+
+        return (
+            gemini_result,
+            "Gemini"
+        )
+
+
+    if groq_result:
+
+        return (
+            groq_result,
+            "Groq partial"
+        )
+
+
+    return None, None
+
+
+# =========================================================
+# РЕЗЕРВ БЕЗ AI
+# =========================================================
 
 def fallback_processed(
     articles
@@ -731,13 +878,11 @@ def fallback_processed(
 
     result = {}
 
-
     for index, article in enumerate(
         articles
     ):
 
         result[index] = {
-
             "event_id":
                 f"FALLBACK_{index}",
 
@@ -751,13 +896,12 @@ def fallback_processed(
                 "",
         }
 
-
     return result
 
 
-# ==========================================
+# =========================================================
 # ОБЪЕДИНЕНИЕ ДУБЛЕЙ
-# ==========================================
+# =========================================================
 
 def group_articles(
     articles,
@@ -765,7 +909,6 @@ def group_articles(
 ):
 
     events = OrderedDict()
-
 
     for index, article in enumerate(
         articles
@@ -776,35 +919,29 @@ def group_articles(
             {}
         )
 
-
         event_id = data.get(
             "event_id",
-            f"FALLBACK_{index}"
+            f"FALLBACK_{index}",
         )
-
 
         title_ru = data.get(
             "title_ru",
-            article["title"]
+            article["title"],
         )
-
 
         summary_ru = data.get(
             "summary_ru",
-            ""
+            "",
         )
-
 
         impact = data.get(
             "impact",
-            "MEDIUM"
+            "MEDIUM",
         )
-
 
         if event_id not in events:
 
             events[event_id] = {
-
                 "region":
                     article["region"],
 
@@ -821,7 +958,6 @@ def group_articles(
                     [],
             }
 
-
         else:
 
             old_impact = (
@@ -829,26 +965,19 @@ def group_articles(
                 ["impact"]
             )
 
-
             if (
-                IMPACT_RANK[
-                    impact
-                ]
+                IMPACT_RANK[impact]
                 >
-                IMPACT_RANK[
-                    old_impact
-                ]
+                IMPACT_RANK[old_impact]
             ):
 
                 events[event_id][
                     "impact"
                 ] = impact
 
-
         events[event_id][
             "sources"
         ].append({
-
             "name":
                 article["source"],
 
@@ -856,29 +985,23 @@ def group_articles(
                 article["link"],
         })
 
-
     return list(
         events.values()
     )
 
 
-# ==========================================
-# УБИРАЕМ ПОВТОРЫ ССЫЛОК
-# ==========================================
+# =========================================================
+# УБИРАЕМ ПОВТОРНЫЕ ССЫЛКИ
+# =========================================================
 
-def unique_sources(
-    sources
-):
+def unique_sources(sources):
 
     result = []
-
     seen = set()
-
 
     for source in sources:
 
         key = (
-
             source.get(
                 "name",
                 ""
@@ -887,30 +1010,22 @@ def unique_sources(
             source.get(
                 "link",
                 ""
-            )
+            ),
         )
-
 
         if key in seen:
             continue
 
+        seen.add(key)
 
-        seen.add(
-            key
-        )
-
-
-        result.append(
-            source
-        )
-
+        result.append(source)
 
     return result
 
 
-# ==========================================
+# =========================================================
 # ОТПРАВКА СОБЫТИЙ
-# ==========================================
+# =========================================================
 
 async def send_events(
     update,
@@ -919,14 +1034,11 @@ async def send_events(
 
     for event in events:
 
-
         sources = unique_sources(
             event["sources"]
         )
 
-
         source_names = []
-
 
         for source in sources:
 
@@ -939,14 +1051,12 @@ async def send_events(
                     source["name"]
                 )
 
-
         if len(source_names) == 1:
 
             sources_text = (
                 f"🗞 Источник: "
                 f"{source_names[0]}"
             )
-
 
         else:
 
@@ -958,12 +1068,10 @@ async def send_events(
                 )
             )
 
-
         message = (
             f"{event['region']}\n\n"
             f"📰 {event['title']}\n"
         )
-
 
         if event["summary"]:
 
@@ -972,11 +1080,9 @@ async def send_events(
                 f"{event['summary']}\n"
             )
 
-
         message += (
             f"\n{sources_text}\n"
         )
-
 
         for source in sources:
 
@@ -986,43 +1092,39 @@ async def send_events(
                 f"{source['link']}"
             )
 
-
         try:
 
             await update.message.reply_text(
                 message,
-                disable_web_page_preview=True
+                disable_web_page_preview=True,
             )
-
 
         except Exception as error:
 
             print(
                 "Telegram send error:",
-                repr(error)
+                repr(error),
             )
 
 
-# ==========================================
-# ОСНОВНАЯ ЛОГИКА НОВОСТЕЙ
-# ==========================================
+# =========================================================
+# ОСНОВНОЙ ЗАПРОС НОВОСТЕЙ
+# =========================================================
 
 async def run_news_request(
     update,
     region_filter=None,
-    important_only=False
+    important_only=False,
 ):
-
 
     if important_only:
 
         status_text = (
             "🔥 Ищу главное...\n"
             "🌍 Проверяю источники\n"
-            "🧠 Сравниваю события\n"
+            "🧠 Анализирую события\n"
             "🇷🇺 Готовлю на русском"
         )
-
 
     elif region_filter:
 
@@ -1033,7 +1135,6 @@ async def run_news_request(
             f"и объединяю дубли"
         )
 
-
     else:
 
         status_text = (
@@ -1043,18 +1144,15 @@ async def run_news_request(
             "🧠 Объединяю одинаковые события"
         )
 
-
     status_message = (
         await update.message.reply_text(
             status_text
         )
     )
 
-
     articles = collect_articles(
         region_filter=region_filter
     )
-
 
     if not articles:
 
@@ -1066,31 +1164,33 @@ async def run_news_request(
         return
 
 
-    processed = (
-        process_articles_with_gemini(
+    processed, provider = (
+        process_articles_with_ai(
             articles
         )
     )
 
 
-    if (
+    ai_failed = (
         processed is None
+    )
+
+
+    if (
+        ai_failed
         and
         important_only
     ):
 
         await status_message.edit_text(
-            "⚠️ Gemini сейчас недоступен, "
-            "поэтому я не могу надёжно "
-            "определить главное."
+            "⚠️ Groq и Gemini сейчас "
+            "не ответили.\n"
+            "Без AI я не буду "
+            "угадывать, какие новости "
+            "главные."
         )
 
         return
-
-
-    ai_failed = (
-        processed is None
-    )
 
 
     if ai_failed:
@@ -1102,37 +1202,25 @@ async def run_news_request(
 
     events = group_articles(
         articles,
-        processed
+        processed,
     )
 
-
-    # ======================================
-    # ГЛАВНЫЕ НОВОСТИ
-    # ======================================
 
     if important_only:
 
         events = [
-
             event
-
             for event in events
-
-            if event[
-                "impact"
-            ] == "HIGH"
+            if event["impact"] == "HIGH"
         ]
 
-
-        # Максимум 5 главных событий
-
+        # Максимум 5
         events = events[:5]
 
 
     try:
 
         await status_message.delete()
-
 
     except Exception:
 
@@ -1147,8 +1235,9 @@ async def run_news_request(
 
         await update.message.reply_text(
             "Среди найденных публикаций "
-            "сейчас нет событий "
-            "высокой важности."
+            "сейчас нет событий, "
+            "которые AI отнёс "
+            "к высокой важности."
         )
 
         return
@@ -1157,56 +1246,44 @@ async def run_news_request(
     if ai_failed:
 
         await update.message.reply_text(
-            "⚠️ AI-обработка временно "
-            "недоступна.\n"
-            "Показываю новости без "
-            "перевода и объединения."
+            "⚠️ Groq и Gemini временно "
+            "не ответили.\n"
+            "Показываю обычные RSS."
         )
 
 
     await send_events(
         update,
-        events
+        events,
     )
 
 
-# ==========================================
+# =========================================================
 # /START
-# ==========================================
+# =========================================================
 
 async def start(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    context: ContextTypes.DEFAULT_TYPE,
 ):
 
     await update.message.reply_text(
-
         "👋 Привет!\n\n"
-
-        "Я собираю новости "
-        "из разных источников, "
+        "Я собираю новости из разных источников, "
         "перевожу их на русский "
         "и объединяю одинаковые события.\n\n"
-
-        "Выбирай раздел кнопками ниже 👇\n\n"
-
-        "🔥 Главное — "
-        "крупные события\n"
-
-        "📰 Все новости — "
-        "общая лента",
-
+        "Выбирай раздел 👇",
         reply_markup=MAIN_MENU,
     )
 
 
-# ==========================================
+# =========================================================
 # /MENU
-# ==========================================
+# =========================================================
 
 async def menu(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    context: ContextTypes.DEFAULT_TYPE,
 ):
 
     await update.message.reply_text(
@@ -1215,13 +1292,13 @@ async def menu(
     )
 
 
-# ==========================================
+# =========================================================
 # /NEWS
-# ==========================================
+# =========================================================
 
 async def news(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    context: ContextTypes.DEFAULT_TYPE,
 ):
 
     await run_news_request(
@@ -1229,28 +1306,58 @@ async def news(
     )
 
 
-# ==========================================
+# =========================================================
 # /IMPORTANT
-# ==========================================
+# =========================================================
 
 async def important(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    context: ContextTypes.DEFAULT_TYPE,
 ):
 
     await run_news_request(
         update,
-        important_only=True
+        important_only=True,
     )
 
 
-# ==========================================
+# =========================================================
+# /STATUS
+# =========================================================
+
+async def status(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    groq_ok = bool(
+        os.environ.get(
+            "GROQ_API_KEY"
+        )
+    )
+
+    gemini_ok = bool(
+        os.environ.get(
+            "GEMINI_API_KEY"
+        )
+    )
+
+    await update.message.reply_text(
+        "🤖 AI-настройки\n\n"
+        f"Groq: "
+        f"{'✅ подключён' if groq_ok else '❌ нет ключа'}\n"
+        f"Gemini: "
+        f"{'✅ подключён' if gemini_ok else '❌ нет ключа'}"
+    )
+
+
+# =========================================================
 # КОМАНДЫ СТРАН
-# ==========================================
+# =========================================================
 
 async def region_command(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    context: ContextTypes.DEFAULT_TYPE,
 ):
 
     command = (
@@ -1261,27 +1368,25 @@ async def region_command(
         .lower()
     )
 
-
     region = COMMAND_TO_REGION.get(
         command
     )
-
 
     if region:
 
         await run_news_request(
             update,
-            region_filter=region
+            region_filter=region,
         )
 
 
-# ==========================================
+# =========================================================
 # /MANUTD 😈
-# ==========================================
+# =========================================================
 
 async def manutd(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    context: ContextTypes.DEFAULT_TYPE,
 ):
 
     await update.message.reply_text(
@@ -1290,13 +1395,13 @@ async def manutd(
     )
 
 
-# ==========================================
-# НАЖАТИЯ НА КНОПКИ
-# ==========================================
+# =========================================================
+# КНОПКИ
+# =========================================================
 
 async def menu_buttons(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    context: ContextTypes.DEFAULT_TYPE,
 ):
 
     text = (
@@ -1304,12 +1409,11 @@ async def menu_buttons(
         .strip()
     )
 
-
     if text == "🔥 Главное":
 
         await important(
             update,
-            context
+            context,
         )
 
         return
@@ -1319,7 +1423,7 @@ async def menu_buttons(
 
         await news(
             update,
-            context
+            context,
         )
 
         return
@@ -1329,12 +1433,11 @@ async def menu_buttons(
         text
     )
 
-
     if region:
 
         await run_news_request(
             update,
-            region_filter=region
+            region_filter=region,
         )
 
         return
@@ -1347,9 +1450,9 @@ async def menu_buttons(
     )
 
 
-# ==========================================
-# СПИСОК TELEGRAM-КОМАНД
-# ==========================================
+# =========================================================
+# TELEGRAM-КОМАНДЫ
+# =========================================================
 
 async def post_init(
     application: Application
@@ -1357,7 +1460,6 @@ async def post_init(
 
     await application.bot.set_my_commands(
         [
-
             BotCommand(
                 "news",
                 "Все новости"
@@ -1407,19 +1509,24 @@ async def post_init(
                 "menu",
                 "Показать меню"
             ),
+
+            BotCommand(
+                "status",
+                "Статус AI"
+            ),
         ]
     )
 
 
-# ==========================================
+# =========================================================
 # ЗАПУСК
-# ==========================================
+# =========================================================
 
 def main():
 
     threading.Thread(
         target=run_web_server,
-        daemon=True
+        daemon=True,
     ).start()
 
 
@@ -1440,12 +1547,10 @@ def main():
     )
 
 
-    # Основные команды
-
     app.add_handler(
         CommandHandler(
             "start",
-            start
+            start,
         )
     )
 
@@ -1453,7 +1558,7 @@ def main():
     app.add_handler(
         CommandHandler(
             "menu",
-            menu
+            menu,
         )
     )
 
@@ -1461,7 +1566,7 @@ def main():
     app.add_handler(
         CommandHandler(
             "news",
-            news
+            news,
         )
     )
 
@@ -1469,44 +1574,44 @@ def main():
     app.add_handler(
         CommandHandler(
             "important",
-            important
+            important,
         )
     )
 
 
-    # Команды стран
+    app.add_handler(
+        CommandHandler(
+            "status",
+            status,
+        )
+    )
+
 
     for command in COMMAND_TO_REGION:
 
         app.add_handler(
             CommandHandler(
                 command,
-                region_command
+                region_command,
             )
         )
 
 
-    # Секретная пасхалка 😈
-
+    # Скрытая команда
     app.add_handler(
         CommandHandler(
             "manutd",
-            manutd
+            manutd,
         )
     )
 
 
-    # Кнопки
-
     app.add_handler(
-
         MessageHandler(
-
             filters.TEXT
             &
             ~filters.COMMAND,
-
-            menu_buttons
+            menu_buttons,
         )
     )
 
@@ -1520,5 +1625,4 @@ def main():
 
 
 if __name__ == "__main__":
-
     main()
