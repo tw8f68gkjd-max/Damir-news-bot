@@ -8,13 +8,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import feedparser
 import requests
-
-from telegram import (
-    Update,
-    ReplyKeyboardMarkup,
-    BotCommand,
-)
-
+from telegram import Update, ReplyKeyboardMarkup, BotCommand
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -37,20 +31,17 @@ GEMINI_MODEL = "gemini-3.8-flash"
 # =========================================================
 
 NEWS_FEEDS = [
-
     # 🇰🇿 КАЗАХСТАН
     {
         "region": "🇰🇿 Казахстан",
         "source": "Kazinform",
         "url": "https://qazinform.com/rss/en.xml",
     },
-
     {
         "region": "🇰🇿 Казахстан",
         "source": "The Astana Times",
         "url": "https://astanatimes.com/feed/",
     },
-
 
     # 🇺🇸 США
     {
@@ -58,27 +49,23 @@ NEWS_FEEDS = [
         "source": "NPR",
         "url": "https://feeds.npr.org/1003/rss.xml",
     },
-
     {
         "region": "🇺🇸 США",
         "source": "BBC",
         "url": "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml",
     },
 
-
     # 🇪🇺 ЕВРОПА
     {
         "region": "🇪🇺 Европа",
         "source": "Euronews",
-        "url": "https://euronews.com/rss?format=mrss&level=vertical&name=my-europe",
+        "url": "https://www.euronews.com/rss?format=mrss&level=vertical&name=my-europe",
     },
-
     {
         "region": "🇪🇺 Европа",
         "source": "BBC",
         "url": "https://feeds.bbci.co.uk/news/world/europe/rss.xml",
     },
-
 
     # 🇨🇳 КИТАЙ
     {
@@ -86,13 +73,11 @@ NEWS_FEEDS = [
         "source": "China News Service",
         "url": "https://www.chinanews.com.cn/rss/china.xml",
     },
-
     {
         "region": "🇨🇳 Китай",
         "source": "BBC",
         "url": "https://feeds.bbci.co.uk/news/world/asia/china/rss.xml",
     },
-
 
     # 🇷🇺 РОССИЯ
     {
@@ -100,13 +85,11 @@ NEWS_FEEDS = [
         "source": "Интерфакс",
         "url": "https://www.interfax.ru/rss.asp",
     },
-
     {
         "region": "🇷🇺 Россия",
         "source": "Meduza",
         "url": "https://meduza.io/rss2/all",
     },
-
 
     # 🌍 МИР
     {
@@ -114,13 +97,11 @@ NEWS_FEEDS = [
         "source": "Euronews",
         "url": "https://www.euronews.com/rss?format=mrss&level=theme&name=news",
     },
-
     {
         "region": "🌍 Мир",
         "source": "BBC",
         "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
     },
-
 
     # 🤖 AI / ТЕХНОЛОГИИ
     {
@@ -128,7 +109,6 @@ NEWS_FEEDS = [
         "source": "TechCrunch",
         "url": "https://techcrunch.com/category/artificial-intelligence/feed/",
     },
-
     {
         "region": "🤖 AI / технологии",
         "source": "The Verge",
@@ -257,7 +237,7 @@ def clean_text(text):
 
 
 # =========================================================
-# ЗАГРУЗКА RSS
+# ПОЛУЧЕНИЕ RSS
 # =========================================================
 
 def collect_articles(
@@ -271,7 +251,8 @@ def collect_articles(
         if (
             region_filter
             and
-            feed_info["region"] != region_filter
+            feed_info["region"]
+            != region_filter
         ):
             continue
 
@@ -357,7 +338,7 @@ def collect_articles(
 
 
 # =========================================================
-# СОЗДАЁМ PROMPT ДЛЯ AI
+# PROMPT ДЛЯ AI
 # =========================================================
 
 def make_ai_prompt(articles):
@@ -373,7 +354,7 @@ def make_ai_prompt(articles):
                 "description",
                 ""
             )
-        )[:700]
+        )[:600]
 
         blocks.append(
             f"""
@@ -398,46 +379,63 @@ DESCRIPTION: {description}
 
 1. Переведи заголовок на естественный русский язык.
 
-2. Напиши короткое описание события:
+2. Напиши краткое описание события на русском:
 максимум 1–2 предложения.
 
-3. Используй только информацию из TITLE и DESCRIPTION.
+3. Используй только TITLE и DESCRIPTION.
 Ничего не выдумывай.
 
-4. Точно сохраняй имена людей, компании, страны,
-даты, суммы, проценты и другие числа.
+4. Точно сохраняй:
+имена людей,
+компании,
+страны,
+даты,
+суммы,
+проценты
+и другие числа.
 
-5. Если несколько публикаций описывают одно и то же
-КОНКРЕТНОЕ событие, присвой им одинаковый EVENT_ID.
+5. Если несколько публикаций описывают
+одно и то же КОНКРЕТНОЕ событие,
+присвой им одинаковый EVENT_ID.
 
-6. Если это похожая тема, но разные события,
+6. Если тема похожа,
+но события разные,
 EVENT_ID должен быть разным.
 
-7. Если сомневаешься — НЕ объединяй события.
+7. Если сомневаешься —
+НЕ объединяй.
 
-8. Определи масштаб события:
+8. Оцени масштаб события:
 
 HIGH =
 крупное событие с широким национальным
 или международным значением,
 серьёзной угрозой безопасности,
 существенным экономическим эффектом
-или значимым решением государственных
+или важным решением государственных
 или международных институтов.
 
 MEDIUM =
 заметное событие более ограниченного масштаба.
 
 LOW =
-локальная, узкая или нишевая новость.
+локальная,
+узкая
+или нишевая новость.
 
-Не повышай важность из-за эмоционального заголовка,
-политической позиции или мнения СМИ.
+9. Не повышай важность
+из-за эмоционального заголовка,
+политической позиции
+или мнения СМИ.
 
-9. Не представляй заявление, обвинение,
-предположение или прогноз как установленный факт.
+10. Не представляй заявление,
+обвинение,
+предположение
+или прогноз
+как установленный факт.
 
-Верни РОВНО одну строку для каждого NEWS_.
+Верни РОВНО одну строку
+для каждого NEWS_.
 
 Формат строго:
 
@@ -451,13 +449,13 @@ LOW
 
 Не используй Markdown.
 Не используй JSON.
-Не пиши никаких объяснений.
+Не пиши пояснений.
 Не пропускай NEWS_.
 
 Публикации:
 
 {articles_text}
-"""
+""".strip()
 
 
 # =========================================================
@@ -490,6 +488,7 @@ def call_groq(prompt):
 
             response = requests.post(
                 url,
+
                 headers={
                     "Authorization":
                         f"Bearer {api_key}",
@@ -497,34 +496,42 @@ def call_groq(prompt):
                     "Content-Type":
                         "application/json",
                 },
+
                 json={
                     "model":
                         GROQ_MODEL,
 
+                    # Для GPT-OSS инструкции
+                    # кладём прямо в user message.
                     "messages": [
-                        {
-                            "role": "system",
-                            "content":
-                                "Ты точный редактор "
-                                "и переводчик новостей."
-                        },
                         {
                             "role": "user",
                             "content": prompt,
-                        },
+                        }
                     ],
 
-                    "temperature": 0.1,
+                    "temperature":
+                        0.2,
 
                     "max_completion_tokens":
-                        6000,
+                        5000,
 
-                    # Для Qwen убираем
-                    # лишние reasoning-токены.
+                    # ВАЖНО:
+                    # GPT-OSS поддерживает
+                    # low / medium / high.
                     "reasoning_effort":
-                        "none",
+                        "low",
+
+                    # Reasoning нам
+                    # в ответе не нужен.
+                    "include_reasoning":
+                        False,
+
+                    "stream":
+                        False,
                 },
-                timeout=60,
+
+                timeout=70,
             )
 
             if response.status_code == 200:
@@ -533,10 +540,18 @@ def call_groq(prompt):
 
                 text = (
                     data["choices"][0]
-                    ["message"]["content"]
+                    ["message"]
+                    .get(
+                        "content",
+                        ""
+                    )
                 )
 
-                if text:
+                if (
+                    text
+                    and
+                    text.strip()
+                ):
 
                     print(
                         "AI provider: GROQ"
@@ -547,11 +562,11 @@ def call_groq(prompt):
             print(
                 "Groq error:",
                 response.status_code,
-                response.text[:1000],
+                response.text[:1200],
             )
 
-            # На rate limit / серверных ошибках
-            # пробуем ещё раз.
+            # Если лимит или временный сбой —
+            # повторяем один раз.
             if (
                 response.status_code == 429
                 or
@@ -564,6 +579,8 @@ def call_groq(prompt):
 
                 continue
 
+            # Если 400/401/403 —
+            # повторять бессмысленно.
             break
 
         except Exception as error:
@@ -604,100 +621,129 @@ def call_gemini(prompt):
         f"{GEMINI_MODEL}:generateContent"
     )
 
-    try:
+    # Тоже две попытки
+    for attempt in range(2):
 
-        response = requests.post(
-            url,
-            headers={
-                "Content-Type":
-                    "application/json",
+        try:
 
-                "x-goog-api-key":
-                    api_key,
-            },
-            json={
-                "contents": [
-                    {
-                        "parts": [
-                            {
-                                "text":
-                                    prompt
-                            }
-                        ]
-                    }
-                ],
+            response = requests.post(
+                url,
 
-                "generationConfig": {
-                    "temperature":
-                        0.1,
+                headers={
+                    "Content-Type":
+                        "application/json",
 
-                    "maxOutputTokens":
-                        6000,
+                    "x-goog-api-key":
+                        api_key,
                 },
-            },
-            timeout=70,
-        )
 
-        if response.status_code != 200:
+                json={
+                    "contents": [
+                        {
+                            "parts": [
+                                {
+                                    "text":
+                                        prompt
+                                }
+                            ]
+                        }
+                    ],
+
+                    "generationConfig": {
+                        "temperature":
+                            0.2,
+
+                        "maxOutputTokens":
+                            5000,
+                    },
+                },
+
+                timeout=80,
+            )
+
+            if response.status_code == 200:
+
+                data = response.json()
+
+                candidates = data.get(
+                    "candidates",
+                    []
+                )
+
+                if candidates:
+
+                    parts = (
+                        candidates[0]
+                        .get(
+                            "content",
+                            {}
+                        )
+                        .get(
+                            "parts",
+                            []
+                        )
+                    )
+
+                    text = "\n".join(
+
+                        part.get(
+                            "text",
+                            ""
+                        )
+
+                        for part in parts
+
+                        if part.get(
+                            "text"
+                        )
+
+                    ).strip()
+
+                    if text:
+
+                        print(
+                            "AI provider: "
+                            "GEMINI FALLBACK"
+                        )
+
+                        return text
 
             print(
                 "Gemini error:",
                 response.status_code,
-                response.text[:1000],
+                response.text[:1200],
             )
 
-            return None
+            if (
+                response.status_code == 429
+                or
+                response.status_code >= 500
+            ):
 
-        data = response.json()
+                time.sleep(
+                    2 + attempt * 2
+                )
 
-        candidates = data.get(
-            "candidates",
-            []
-        )
+                continue
 
-        if not candidates:
+            break
 
-            return None
-
-        parts = (
-            candidates[0]
-            .get("content", {})
-            .get("parts", [])
-        )
-
-        text = "\n".join(
-            part.get(
-                "text",
-                ""
-            )
-
-            for part in parts
-
-            if part.get(
-                "text"
-            )
-        ).strip()
-
-        if text:
+        except Exception as error:
 
             print(
-                "AI provider: GEMINI FALLBACK"
+                "Gemini exception:",
+                repr(error),
             )
 
-            return text
-
-    except Exception as error:
-
-        print(
-            "Gemini exception:",
-            repr(error),
-        )
+            time.sleep(
+                2 + attempt * 2
+            )
 
     return None
 
 
 # =========================================================
-# ЧИТАЕМ ОТВЕТ AI
+# РАЗБОР ОТВЕТА AI
 # =========================================================
 
 def parse_ai_response(
@@ -727,27 +773,11 @@ def parse_ai_response(
         if len(pieces) != 5:
             continue
 
-        news_id = (
-            pieces[0].strip()
-        )
-
-        event_id = (
-            pieces[1].strip()
-        )
-
-        impact = (
-            pieces[2]
-            .strip()
-            .upper()
-        )
-
-        title_ru = (
-            pieces[3].strip()
-        )
-
-        summary_ru = (
-            pieces[4].strip()
-        )
+        news_id = pieces[0].strip()
+        event_id = pieces[1].strip()
+        impact = pieces[2].strip().upper()
+        title_ru = pieces[3].strip()
+        summary_ru = pieces[4].strip()
 
         try:
 
@@ -765,7 +795,6 @@ def parse_ai_response(
         if not (
             0 <= index < article_count
         ):
-
             continue
 
         if impact not in IMPACT_RANK:
@@ -773,8 +802,11 @@ def parse_ai_response(
             impact = "MEDIUM"
 
         processed[index] = {
+
             "event_id":
-                event_id,
+                event_id
+                or
+                f"EVENT_{index}",
 
             "impact":
                 impact,
@@ -801,7 +833,7 @@ def process_articles_with_ai(
         articles
     )
 
-    # 1. GROQ
+    # 1. Сначала Groq
     groq_text = call_groq(
         prompt
     )
@@ -811,28 +843,27 @@ def process_articles_with_ai(
         len(articles),
     )
 
-    # Если Groq обработал всё —
-    # Gemini вообще не тратим.
+    # Если обработал всё —
+    # Gemini вообще не вызываем.
     if (
         len(groq_result)
         ==
         len(articles)
     ):
 
-        return groq_result, "Groq"
-
+        return groq_result
 
     if groq_text:
 
         print(
-            "Groq returned partial result:",
+            "Groq partial:",
             len(groq_result),
             "/",
             len(articles),
         )
 
-
-    # 2. GEMINI FALLBACK
+    # 2. Если Groq не справился полностью —
+    # пробуем Gemini.
     gemini_text = call_gemini(
         prompt
     )
@@ -842,30 +873,32 @@ def process_articles_with_ai(
         len(articles),
     )
 
-
     if (
         len(gemini_result)
-        >=
-        len(groq_result)
-        and
-        gemini_result
+        ==
+        len(articles)
     ):
 
-        return (
-            gemini_result,
-            "Gemini"
-        )
+        return gemini_result
 
+    # Если оба дали часть результата,
+    # объединяем их.
+    merged = dict(
+        groq_result
+    )
 
-    if groq_result:
+    for index, item in (
+        gemini_result.items()
+    ):
 
-        return (
-            groq_result,
-            "Groq partial"
-        )
+        if index not in merged:
 
+            merged[index] = item
 
-    return None, None
+    if merged:
+        return merged
+
+    return None
 
 
 # =========================================================
@@ -873,16 +906,23 @@ def process_articles_with_ai(
 # =========================================================
 
 def fallback_processed(
-    articles
+    articles,
+    existing=None
 ):
 
-    result = {}
+    result = dict(
+        existing or {}
+    )
 
     for index, article in enumerate(
         articles
     ):
 
+        if index in result:
+            continue
+
         result[index] = {
+
             "event_id":
                 f"FALLBACK_{index}",
 
@@ -942,6 +982,7 @@ def group_articles(
         if event_id not in events:
 
             events[event_id] = {
+
                 "region":
                     article["region"],
 
@@ -978,6 +1019,7 @@ def group_articles(
         events[event_id][
             "sources"
         ].append({
+
             "name":
                 article["source"],
 
@@ -994,7 +1036,9 @@ def group_articles(
 # УБИРАЕМ ПОВТОРНЫЕ ССЫЛКИ
 # =========================================================
 
-def unique_sources(sources):
+def unique_sources(
+    sources
+):
 
     result = []
     seen = set()
@@ -1006,7 +1050,6 @@ def unique_sources(sources):
                 "name",
                 ""
             ),
-
             source.get(
                 "link",
                 ""
@@ -1016,15 +1059,19 @@ def unique_sources(sources):
         if key in seen:
             continue
 
-        seen.add(key)
+        seen.add(
+            key
+        )
 
-        result.append(source)
+        result.append(
+            source
+        )
 
     return result
 
 
 # =========================================================
-# ОТПРАВКА СОБЫТИЙ
+# ОТПРАВКА НОВОСТЕЙ
 # =========================================================
 
 async def send_events(
@@ -1108,13 +1155,13 @@ async def send_events(
 
 
 # =========================================================
-# ОСНОВНОЙ ЗАПРОС НОВОСТЕЙ
+# ОСНОВНАЯ ЛОГИКА
 # =========================================================
 
 async def run_news_request(
     update,
     region_filter=None,
-    important_only=False,
+    important_only=False
 ):
 
     if important_only:
@@ -1131,8 +1178,8 @@ async def run_news_request(
         status_text = (
             f"🔎 Собираю: "
             f"{region_filter}\n"
-            f"🇷🇺 Перевожу "
-            f"и объединяю дубли"
+            "🇷🇺 Перевожу "
+            "и объединяю дубли"
         )
 
     else:
@@ -1163,21 +1210,16 @@ async def run_news_request(
 
         return
 
-
-    processed, provider = (
+    processed = (
         process_articles_with_ai(
             articles
         )
     )
 
-
-    ai_failed = (
-        processed is None
-    )
-
-
+    # Для /important без AI
+    # ничего не угадываем.
     if (
-        ai_failed
+        processed is None
         and
         important_only
     ):
@@ -1185,47 +1227,49 @@ async def run_news_request(
         await status_message.edit_text(
             "⚠️ Groq и Gemini сейчас "
             "не ответили.\n"
-            "Без AI я не буду "
-            "угадывать, какие новости "
-            "главные."
+            "Без AI я не буду угадывать, "
+            "какие новости главные."
         )
 
         return
 
+    ai_failed = (
+        processed is None
+    )
 
-    if ai_failed:
-
-        processed = fallback_processed(
-            articles
-        )
-
+    # Если AI дал только часть —
+    # недостающие новости всё равно
+    # не исчезнут.
+    processed = fallback_processed(
+        articles,
+        processed
+    )
 
     events = group_articles(
         articles,
         processed,
     )
 
-
     if important_only:
 
         events = [
+
             event
+
             for event in events
-            if event["impact"] == "HIGH"
-        ]
 
-        # Максимум 5
-        events = events[:5]
+            if event[
+                "impact"
+            ] == "HIGH"
 
+        ][:5]
 
     try:
 
         await status_message.delete()
 
     except Exception:
-
         pass
-
 
     if (
         important_only
@@ -1242,7 +1286,6 @@ async def run_news_request(
 
         return
 
-
     if ai_failed:
 
         await update.message.reply_text(
@@ -1250,7 +1293,6 @@ async def run_news_request(
             "не ответили.\n"
             "Показываю обычные RSS."
         )
-
 
     await send_events(
         update,
@@ -1264,15 +1306,20 @@ async def run_news_request(
 
 async def start(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
     await update.message.reply_text(
+
         "👋 Привет!\n\n"
-        "Я собираю новости из разных источников, "
+
+        "Я собираю новости "
+        "из разных источников, "
         "перевожу их на русский "
         "и объединяю одинаковые события.\n\n"
+
         "Выбирай раздел 👇",
+
         reply_markup=MAIN_MENU,
     )
 
@@ -1283,7 +1330,7 @@ async def start(
 
 async def menu(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
     await update.message.reply_text(
@@ -1298,7 +1345,7 @@ async def menu(
 
 async def news(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
     await run_news_request(
@@ -1312,7 +1359,7 @@ async def news(
 
 async def important(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
     await run_news_request(
@@ -1322,42 +1369,12 @@ async def important(
 
 
 # =========================================================
-# /STATUS
-# =========================================================
-
-async def status(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    groq_ok = bool(
-        os.environ.get(
-            "GROQ_API_KEY"
-        )
-    )
-
-    gemini_ok = bool(
-        os.environ.get(
-            "GEMINI_API_KEY"
-        )
-    )
-
-    await update.message.reply_text(
-        "🤖 AI-настройки\n\n"
-        f"Groq: "
-        f"{'✅ подключён' if groq_ok else '❌ нет ключа'}\n"
-        f"Gemini: "
-        f"{'✅ подключён' if gemini_ok else '❌ нет ключа'}"
-    )
-
-
-# =========================================================
 # КОМАНДЫ СТРАН
 # =========================================================
 
 async def region_command(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
     command = (
@@ -1386,12 +1403,198 @@ async def region_command(
 
 async def manutd(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
     await update.message.reply_text(
         "Муха лох.\n"
-        "Слабый везде😂"
+        "Слабый везде 🤣"
+    )
+
+
+# =========================================================
+# /STATUS
+# РЕАЛЬНО ПРОВЕРЯЕТ API, А НЕ ПРОСТО НАЛИЧИЕ КЛЮЧА
+# =========================================================
+
+def test_groq_connection():
+
+    api_key = os.environ.get(
+        "GROQ_API_KEY"
+    )
+
+    if not api_key:
+
+        return (
+            False,
+            "нет ключа"
+        )
+
+    try:
+
+        response = requests.get(
+            "https://api.groq.com/"
+            "openai/v1/models",
+
+            headers={
+                "Authorization":
+                    f"Bearer {api_key}",
+
+                "Content-Type":
+                    "application/json",
+            },
+
+            timeout=15,
+        )
+
+        if response.status_code != 200:
+
+            return (
+                False,
+                f"HTTP "
+                f"{response.status_code}"
+            )
+
+        model_ids = {
+
+            item.get(
+                "id"
+            )
+
+            for item in (
+                response.json()
+                .get(
+                    "data",
+                    []
+                )
+            )
+        }
+
+        if GROQ_MODEL in model_ids:
+
+            return (
+                True,
+                "API и модель доступны"
+            )
+
+        return (
+            False,
+            "ключ работает, "
+            "но модель не найдена"
+        )
+
+    except Exception:
+
+        return (
+            False,
+            "нет ответа"
+        )
+
+
+def test_gemini_connection():
+
+    api_key = os.environ.get(
+        "GEMINI_API_KEY"
+    )
+
+    if not api_key:
+
+        return (
+            False,
+            "нет ключа"
+        )
+
+    try:
+
+        response = requests.get(
+            "https://generativelanguage.googleapis.com/"
+            "v1beta/models",
+
+            headers={
+                "x-goog-api-key":
+                    api_key
+            },
+
+            timeout=15,
+        )
+
+        if response.status_code != 200:
+
+            return (
+                False,
+                f"HTTP "
+                f"{response.status_code}"
+            )
+
+        model_names = {
+
+            item.get(
+                "name",
+                ""
+            ).replace(
+                "models/",
+                ""
+            )
+
+            for item in (
+                response.json()
+                .get(
+                    "models",
+                    []
+                )
+            )
+        }
+
+        if GEMINI_MODEL in model_names:
+
+            return (
+                True,
+                "API и модель доступны"
+            )
+
+        return (
+            False,
+            "ключ работает, "
+            "но модель не найдена"
+        )
+
+    except Exception:
+
+        return (
+            False,
+            "нет ответа"
+        )
+
+
+async def status(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    message = (
+        await update.message.reply_text(
+            "🔎 Проверяю AI-сервисы..."
+        )
+    )
+
+    groq_ok, groq_info = (
+        test_groq_connection()
+    )
+
+    gemini_ok, gemini_info = (
+        test_gemini_connection()
+    )
+
+    await message.edit_text(
+        "🤖 Статус AI\n\n"
+
+        f"Groq: "
+        f"{'✅' if groq_ok else '❌'} "
+        f"{groq_info}\n"
+
+        f"Gemini: "
+        f"{'✅' if gemini_ok else '❌'} "
+        f"{gemini_info}"
     )
 
 
@@ -1401,7 +1604,7 @@ async def manutd(
 
 async def menu_buttons(
     update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
     text = (
@@ -1413,21 +1616,19 @@ async def menu_buttons(
 
         await important(
             update,
-            context,
+            context
         )
 
         return
-
 
     if text == "📰 Все новости":
 
         await news(
             update,
-            context,
+            context
         )
 
         return
-
 
     region = BUTTON_TO_REGION.get(
         text
@@ -1442,16 +1643,16 @@ async def menu_buttons(
 
         return
 
-
     await update.message.reply_text(
         "Выбери раздел "
         "кнопками ниже 👇",
+
         reply_markup=MAIN_MENU,
     )
 
 
 # =========================================================
-# TELEGRAM-КОМАНДЫ
+# TELEGRAM COMMAND MENU
 # =========================================================
 
 async def post_init(
@@ -1512,7 +1713,7 @@ async def post_init(
 
             BotCommand(
                 "status",
-                "Статус AI"
+                "Проверить AI"
             ),
         ]
     )
@@ -1529,11 +1730,9 @@ def main():
         daemon=True,
     ).start()
 
-
     telegram_token = os.environ[
         "TELEGRAM_BOT_TOKEN"
     ]
-
 
     app = (
         Application.builder()
@@ -1546,14 +1745,12 @@ def main():
         .build()
     )
 
-
     app.add_handler(
         CommandHandler(
             "start",
             start,
         )
     )
-
 
     app.add_handler(
         CommandHandler(
@@ -1562,14 +1759,12 @@ def main():
         )
     )
 
-
     app.add_handler(
         CommandHandler(
             "news",
             news,
         )
     )
-
 
     app.add_handler(
         CommandHandler(
@@ -1578,14 +1773,12 @@ def main():
         )
     )
 
-
     app.add_handler(
         CommandHandler(
             "status",
             status,
         )
     )
-
 
     for command in COMMAND_TO_REGION:
 
@@ -1596,8 +1789,7 @@ def main():
             )
         )
 
-
-    # Скрытая команда
+    # Скрытая пасхалка 😈
     app.add_handler(
         CommandHandler(
             "manutd",
@@ -1605,21 +1797,19 @@ def main():
         )
     )
 
-
     app.add_handler(
         MessageHandler(
             filters.TEXT
             &
             ~filters.COMMAND,
+
             menu_buttons,
         )
     )
 
-
     print(
         "Telegram bot started"
     )
-
 
     app.run_polling()
 
