@@ -33,6 +33,7 @@ class HealthHandler(BaseHTTPRequestHandler):
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    print(f"Web server started on port {port}")
     server.serve_forever()
 
 
@@ -40,7 +41,8 @@ def translate_titles(titles):
     api_key = os.environ.get("GEMINI_API_KEY")
 
     if not api_key:
-        return titles
+        print("GEMINI_API_KEY missing")
+        return None
 
     url = (
         "https://generativelanguage.googleapis.com/v1beta/"
@@ -48,10 +50,13 @@ def translate_titles(titles):
     )
 
     prompt = (
-        "Переведи все заголовки новостей на естественный русский язык.\n"
-        "Не добавляй никаких новых фактов.\n"
-        "Сохрани имена, даты, числа и смысл точно.\n"
-        "Верни переводы строго в том же порядке.\n\n"
+        "Переведи каждый заголовок новости на естественный русский язык.\n"
+        "Правила:\n"
+        "- ничего не добавляй от себя;\n"
+        "- не сокращай важные факты;\n"
+        "- точно сохраняй имена, страны, даты и числа;\n"
+        "- верни переводы строго в исходном порядке.\n\n"
+        "Заголовки:\n"
         + json.dumps(titles, ensure_ascii=False)
     )
 
@@ -71,11 +76,17 @@ def translate_titles(titles):
                     }
                 ],
                 "generationConfig": {
-                    "responseMimeType": "application/json",
-                    "responseSchema": {
-                        "type": "ARRAY",
-                        "items": {
-                            "type": "STRING"
+                    "responseFormat": {
+                        "text": {
+                            "mimeType": "application/json",
+                            "schema": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "minItems": len(titles),
+                                "maxItems": len(titles)
+                            }
                         }
                     }
                 }
@@ -84,16 +95,21 @@ def translate_titles(titles):
         )
 
         if response.status_code != 200:
-            return titles
+            print(
+                "Gemini HTTP error:",
+                response.status_code,
+                response.text[:1000]
+            )
+            return None
 
         data = response.json()
 
-        text = (
+        raw_text = (
             data["candidates"][0]
             ["content"]["parts"][0]["text"]
         )
 
-        translated = json.loads(text)
+        translated = json.loads(raw_text)
 
         if (
             isinstance(translated, list)
@@ -101,10 +117,12 @@ def translate_titles(titles):
         ):
             return translated
 
-    except Exception:
-        pass
+        print("Gemini returned unexpected result:", raw_text)
+        return None
 
-    return titles
+    except Exception as e:
+        print("Gemini exception:", repr(e))
+        return None
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -138,34 +156,40 @@ async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not articles:
         await status.edit_text(
-            "Не удалось получить новости."
+            "❌ Не удалось получить новости."
         )
         return
 
-    original_titles = [
+    titles = [
         article["title"]
         for article in articles
     ]
 
-    translated_titles = translate_titles(original_titles)
+    translated_titles = translate_titles(titles)
 
-    for article, translated_title in zip(
-        articles,
-        translated_titles
-    ):
-        message = (
-            f"{article['category']}\n\n"
-            f"📰 {translated_title}\n\n"
-            f"🗞 {article['source']}\n"
-            f"🔗 {article['link']}"
+    if translated_titles is None:
+        await status.edit_text(
+            "⚠️ Новости получены, но перевод Gemini сейчас не удался."
         )
-
-        await update.message.reply_text(message)
+        return
 
     try:
         await status.delete()
     except Exception:
         pass
+
+    for article, russian_title in zip(
+        articles,
+        translated_titles
+    ):
+        message = (
+            f"{article['category']}\n\n"
+            f"📰 {russian_title}\n\n"
+            f"🗞 {article['source']}\n"
+            f"🔗 {article['link']}"
+        )
+
+        await update.message.reply_text(message)
 
 
 def main():
@@ -186,6 +210,7 @@ def main():
         CommandHandler("news", news)
     )
 
+    print("Telegram bot started")
     app.run_polling()
 
 
