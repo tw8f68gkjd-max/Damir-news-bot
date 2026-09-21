@@ -1,15 +1,9 @@
-import os
-import re
-import html
-import time
-import uuid
-import threading
+import os, re, html, time, uuid, threading
+import xml.etree.ElementTree as ET
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-import feedparser
-import requests
-
+import feedparser, requests
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
@@ -17,7 +11,6 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
 )
-
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -41,101 +34,93 @@ GEMINI_MODEL = "gemini-3.8-flash"
 # =========================================================
 
 NEWS_FEEDS = [
-
-    # 🇰🇿 КАЗАХСТАН
     {
         "region": "🇰🇿 Казахстан",
         "source": "Kazinform",
-        "url": "https://qazinform.com/rss/en.xml",
+        "url": "https://qazinform.com/rss/en.xml"
     },
     {
         "region": "🇰🇿 Казахстан",
         "source": "The Astana Times",
-        "url": "https://astanatimes.com/feed/",
+        "url": "https://astanatimes.com/feed/"
     },
 
-    # 🇺🇸 США
     {
         "region": "🇺🇸 США",
         "source": "NPR",
-        "url": "https://feeds.npr.org/1003/rss.xml",
+        "url": "https://feeds.npr.org/1003/rss.xml"
     },
     {
         "region": "🇺🇸 США",
         "source": "BBC",
-        "url": "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml",
+        "url": "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml"
     },
 
-    # 🇪🇺 ЕВРОПА
     {
         "region": "🇪🇺 Европа",
         "source": "Euronews",
-        "url": "https://www.euronews.com/rss?format=mrss&level=vertical&name=my-europe",
+        "url": "https://www.euronews.com/rss?format=mrss&level=vertical&name=my-europe"
     },
     {
         "region": "🇪🇺 Европа",
         "source": "BBC",
-        "url": "https://feeds.bbci.co.uk/news/world/europe/rss.xml",
+        "url": "https://feeds.bbci.co.uk/news/world/europe/rss.xml"
     },
 
-    # 🇨🇳 КИТАЙ
     {
         "region": "🇨🇳 Китай",
         "source": "China News Service",
-        "url": "https://www.chinanews.com.cn/rss/china.xml",
+        "url": "https://www.chinanews.com.cn/rss/china.xml"
     },
     {
         "region": "🇨🇳 Китай",
         "source": "BBC",
-        "url": "https://feeds.bbci.co.uk/news/world/asia/china/rss.xml",
+        "url": "https://feeds.bbci.co.uk/news/world/asia/china/rss.xml"
     },
 
-    # 🇷🇺 РОССИЯ
     {
         "region": "🇷🇺 Россия",
         "source": "Интерфакс",
-        "url": "https://www.interfax.ru/rss.asp",
+        "url": "https://www.interfax.ru/rss.asp"
     },
     {
         "region": "🇷🇺 Россия",
         "source": "Meduza",
-        "url": "https://meduza.io/rss2/all",
+        "url": "https://meduza.io/rss2/all"
     },
 
-    # 🌍 МИР
     {
         "region": "🌍 Мир",
         "source": "Euronews",
-        "url": "https://www.euronews.com/rss?format=mrss&level=theme&name=news",
+        "url": "https://www.euronews.com/rss?format=mrss&level=theme&name=news"
     },
     {
         "region": "🌍 Мир",
         "source": "BBC",
-        "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
+        "url": "https://feeds.bbci.co.uk/news/world/rss.xml"
     },
 
-    # 🤖 AI / ТЕХНОЛОГИИ
     {
         "region": "🤖 AI / технологии",
         "source": "TechCrunch",
-        "url": "https://techcrunch.com/category/artificial-intelligence/feed/",
+        "url": "https://techcrunch.com/category/artificial-intelligence/feed/"
     },
     {
         "region": "🤖 AI / технологии",
         "source": "The Verge",
-        "url": "https://www.theverge.com/rss/index.xml",
+        "url": "https://www.theverge.com/rss/index.xml"
     },
 ]
 
 
 # =========================================================
-# МЕНЮ
+# ГЛАВНОЕ МЕНЮ
 # =========================================================
 
 MAIN_MENU = ReplyKeyboardMarkup(
     [
         ["🔥 Главное", "⚡ Кратко"],
-        ["📰 Все новости"],
+        ["📰 Все новости", "💰 Финансы"],
         ["🇰🇿 Казахстан", "🇺🇸 США"],
         ["🇪🇺 Европа", "🇨🇳 Китай"],
         ["🇷🇺 Россия", "🌍 Мир"],
@@ -146,13 +131,16 @@ MAIN_MENU = ReplyKeyboardMarkup(
 
 
 BUTTON_TO_REGION = {
-    "🇰🇿 Казахстан": "🇰🇿 Казахстан",
-    "🇺🇸 США": "🇺🇸 США",
-    "🇪🇺 Европа": "🇪🇺 Европа",
-    "🇨🇳 Китай": "🇨🇳 Китай",
-    "🇷🇺 Россия": "🇷🇺 Россия",
-    "🌍 Мир": "🌍 Мир",
-    "🤖 AI / технологии": "🤖 AI / технологии",
+    x: x
+    for x in [
+        "🇰🇿 Казахстан",
+        "🇺🇸 США",
+        "🇪🇺 Европа",
+        "🇨🇳 Китай",
+        "🇷🇺 Россия",
+        "🌍 Мир",
+        "🤖 AI / технологии",
+    ]
 }
 
 
@@ -164,6 +152,17 @@ COMMAND_TO_REGION = {
     "russia": "🇷🇺 Россия",
     "world": "🌍 Мир",
     "ai": "🤖 AI / технологии",
+}
+
+
+REGION_CODE_TO_LABEL = {
+    "KZ": "🇰🇿 Казахстан",
+    "US": "🇺🇸 США",
+    "EUROPE": "🇪🇺 Европа",
+    "CHINA": "🇨🇳 Китай",
+    "RUSSIA": "🇷🇺 Россия",
+    "WORLD": "🌍 Мир",
+    "AI": "🤖 AI / технологии",
 }
 
 
@@ -184,9 +183,10 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header(
             "Content-type",
-            "text/plain",
+            "text/plain"
         )
         self.end_headers()
+
         self.wfile.write(
             b"Bot is running"
         )
@@ -210,7 +210,7 @@ def run_web_server():
 
     server = HTTPServer(
         ("0.0.0.0", port),
-        HealthHandler,
+        HealthHandler
     )
 
     print(
@@ -221,7 +221,7 @@ def run_web_server():
 
 
 # =========================================================
-# ОЧИСТКА ТЕКСТА
+# ТЕКСТ
 # =========================================================
 
 def clean_text(text):
@@ -236,16 +236,53 @@ def clean_text(text):
     text = re.sub(
         r"<[^>]+>",
         " ",
-        text,
+        text
     )
 
-    text = " ".join(
+    return " ".join(
         text
         .replace("\n", " ")
         .split()
     )
 
-    return text
+
+def protected_terms(text):
+
+    tokens = re.findall(
+        r"\b[A-Za-z0-9][A-Za-z0-9.+#&'_-]*\b",
+        text or ""
+    )
+
+    result = []
+
+    for token in tokens:
+
+        special = (
+            any(
+                ch.isupper()
+                for ch in token[1:]
+            )
+            or
+            any(
+                ch.isdigit()
+                for ch in token
+            )
+            or
+            (
+                len(token) >= 2
+                and token.isupper()
+            )
+        )
+
+        if (
+            special
+            and token not in result
+        ):
+            result.append(
+                token
+            )
+
+    return result[:12]
 
 
 # =========================================================
@@ -272,10 +309,12 @@ def collect_articles(
 
             response = requests.get(
                 feed_info["url"],
+
                 headers={
                     "User-Agent":
                         "Mozilla/5.0 NewsBot/1.0"
                 },
+
                 timeout=15,
             )
 
@@ -315,39 +354,50 @@ def collect_articles(
             if not title:
                 continue
 
-            articles.append({
-                "region":
-                    feed_info["region"],
+            articles.append(
+                {
+                    "source_region":
+                        feed_info["region"],
 
-                "source":
-                    feed_info["source"],
+                    "source":
+                        feed_info["source"],
 
-                "title":
-                    title,
+                    "title":
+                        title,
 
-                "description":
-                    description,
+                    "description":
+                        description,
 
-                "link":
-                    link,
-            })
+                    "link":
+                        link,
+
+                    "protected":
+                        protected_terms(
+                            title
+                            + " "
+                            + description
+                        ),
+                }
+            )
 
         except Exception as error:
 
             print(
                 f"RSS error "
                 f"{feed_info['source']}:",
-                repr(error),
+                repr(error)
             )
 
     return articles
 
 
 # =========================================================
-# PROMPT ДЛЯ ОБРАБОТКИ НОВОСТЕЙ
+# PROMPT ДЛЯ AI
 # =========================================================
 
-def make_ai_prompt(articles):
+def make_ai_prompt(
+    articles
+):
 
     blocks = []
 
@@ -362,13 +412,21 @@ def make_ai_prompt(articles):
             )
         )[:600]
 
+        protected = ", ".join(
+            article.get(
+                "protected",
+                []
+            )
+        ) or "нет"
+
         blocks.append(
             f"""
 NEWS_{index}
-REGION: {article['region']}
+SOURCE_BUCKET: {article['source_region']}
 SOURCE: {article['source']}
 TITLE: {article['title']}
 DESCRIPTION: {description}
+PROTECTED_TERMS: {protected}
 """.strip()
         )
 
@@ -379,65 +437,65 @@ DESCRIPTION: {description}
     return f"""
 Ты редактор русскоязычного новостного агрегатора.
 
-Обработай КАЖДУЮ публикацию.
+SOURCE_BUCKET — только технический раздел RSS.
+Он НЕ означает место события.
 
 Для каждого NEWS_:
 
-1. Переведи заголовок на естественный русский язык.
+1. Переведи заголовок на естественный русский.
 
-2. Напиши краткое описание:
+2. Дай краткое описание:
 максимум 1–2 предложения.
 
 3. Используй только TITLE и DESCRIPTION.
 Ничего не выдумывай.
 
-4. Точно сохраняй имена, страны,
-компании, даты, суммы, проценты и числа.
+4. Никогда не заменяй человека,
+компанию, бренд или продукт на другого.
 
-5. Если несколько публикаций описывают
-одно и то же КОНКРЕТНОЕ событие,
+PROTECTED_TERMS сохраняй ТОЧНО.
+
+Например:
+MrBeast нельзя превращать в Microsoft.
+
+5. Определи реальную категорию:
+
+KZ = Казахстан
+US = США
+EUROPE = Европа
+CHINA = Китай
+RUSSIA = Россия
+AI = AI / технологии
+WORLD = всё остальное,
+другая страна
+или международное событие
+
+6. Если публикации описывают
+одно и то же конкретное событие,
 дай им одинаковый EVENT_ID.
 
-6. Если события разные —
-EVENT_ID должен быть разным.
-
-7. Если сомневаешься —
+Если сомневаешься —
 не объединяй.
 
-8. Определи масштаб:
+7. Оцени масштаб:
 
-HIGH =
-крупное событие национального
-или международного значения,
-важное решение,
-серьёзный экономический эффект
-или значимая угроза безопасности.
+HIGH
+MEDIUM
+LOW
 
-MEDIUM =
-заметное событие ограниченного масштаба.
-
-LOW =
-локальная или нишевая новость.
-
-Не повышай важность из-за
-эмоционального заголовка
-или политической позиции источника.
-
-Не представляй заявление,
-обвинение, предположение
-или прогноз как установленный факт.
+8. Заявления,
+обвинения,
+предположения
+и прогнозы
+не представляй
+как установленный факт.
 
 Верни ровно одну строку
 для каждого NEWS_.
 
 Формат:
 
-NEWS_0|||EVENT_1|||HIGH|||РУССКИЙ ЗАГОЛОВОК|||КРАТКОЕ ОПИСАНИЕ
-
-Допустимые уровни:
-HIGH
-MEDIUM
-LOW
+NEWS_0|||EVENT_1|||HIGH|||WORLD|||РУССКИЙ ЗАГОЛОВОК|||КРАТКОЕ ОПИСАНИЕ
 
 Не используй Markdown.
 Не используй JSON.
@@ -453,7 +511,9 @@ LOW
 # GROQ
 # =========================================================
 
-def call_groq(prompt):
+def call_groq(
+    prompt
+):
 
     api_key = os.environ.get(
         "GROQ_API_KEY"
@@ -488,22 +548,22 @@ def call_groq(prompt):
 
                     "messages": [
                         {
-                            "role": "user",
-                            "content": prompt,
+                            "role":
+                                "user",
+
+                            "content":
+                                prompt,
                         }
                     ],
 
                     "temperature":
-                        0.2,
+                        0.1,
 
                     "max_completion_tokens":
                         5000,
 
                     "reasoning_effort":
                         "low",
-
-                    "include_reasoning":
-                        False,
 
                     "stream":
                         False,
@@ -523,20 +583,21 @@ def call_groq(prompt):
                         "content",
                         ""
                     )
+                    .strip()
                 )
 
-                if text and text.strip():
+                if text:
 
                     print(
                         "AI provider: GROQ"
                     )
 
-                    return text.strip()
+                    return text
 
             print(
                 "Groq error:",
                 response.status_code,
-                response.text[:1000],
+                response.text[:800],
             )
 
             if (
@@ -557,7 +618,7 @@ def call_groq(prompt):
 
             print(
                 "Groq exception:",
-                repr(error),
+                repr(error)
             )
 
             time.sleep(
@@ -568,10 +629,12 @@ def call_groq(prompt):
 
 
 # =========================================================
-# GEMINI — РЕЗЕРВ
+# GEMINI FALLBACK
 # =========================================================
 
-def call_gemini(prompt):
+def call_gemini(
+    prompt
+):
 
     api_key = os.environ.get(
         "GEMINI_API_KEY"
@@ -582,8 +645,7 @@ def call_gemini(prompt):
 
     url = (
         "https://generativelanguage.googleapis.com/"
-        "v1beta/models/"
-        f"{GEMINI_MODEL}:generateContent"
+        f"v1beta/models/{GEMINI_MODEL}:generateContent"
     )
 
     for attempt in range(2):
@@ -615,7 +677,7 @@ def call_gemini(prompt):
 
                     "generationConfig": {
                         "temperature":
-                            0.2,
+                            0.1,
 
                         "maxOutputTokens":
                             5000,
@@ -659,13 +721,13 @@ def call_gemini(prompt):
                         if part.get(
                             "text"
                         )
-
                     ).strip()
 
                     if text:
 
                         print(
-                            "AI provider: GEMINI FALLBACK"
+                            "AI provider: "
+                            "GEMINI FALLBACK"
                         )
 
                         return text
@@ -673,7 +735,7 @@ def call_gemini(prompt):
             print(
                 "Gemini error:",
                 response.status_code,
-                response.text[:1000],
+                response.text[:800],
             )
 
             if (
@@ -694,7 +756,7 @@ def call_gemini(prompt):
 
             print(
                 "Gemini exception:",
-                repr(error),
+                repr(error)
             )
 
             time.sleep(
@@ -704,29 +766,19 @@ def call_gemini(prompt):
     return None
 
 
-# =========================================================
-# ЛЮБОЙ AI-ЗАПРОС:
-# GROQ -> GEMINI
-# =========================================================
+def ask_ai(
+    prompt
+):
 
-def ask_ai(prompt):
-
-    answer = call_groq(
-        prompt
+    return (
+        call_groq(prompt)
+        or
+        call_gemini(prompt)
     )
 
-    if answer:
-        return answer
-
-    answer = call_gemini(
-        prompt
-    )
-
-    return answer
-
 
 # =========================================================
-# РАЗБОР НОВОСТНОГО ОТВЕТА AI
+# РАЗБОР AI
 # =========================================================
 
 def parse_ai_response(
@@ -750,34 +802,44 @@ def parse_ai_response(
 
         pieces = line.split(
             "|||",
-            4
+            5
         )
 
-        if len(pieces) != 5:
+        if len(pieces) != 6:
             continue
-
-        news_id = pieces[0].strip()
-        event_id = pieces[1].strip()
-        impact = pieces[2].strip().upper()
-        title_ru = pieces[3].strip()
-        summary_ru = pieces[4].strip()
 
         try:
 
             index = int(
-                news_id.replace(
+                pieces[0]
+                .replace(
                     "NEWS_",
                     ""
                 )
             )
 
         except ValueError:
+
             continue
 
         if not (
-            0 <= index < article_count
+            0
+            <= index
+            < article_count
         ):
             continue
+
+        impact = (
+            pieces[2]
+            .strip()
+            .upper()
+        )
+
+        region = (
+            pieces[3]
+            .strip()
+            .upper()
+        )
 
         if impact not in IMPACT_RANK:
 
@@ -786,26 +848,28 @@ def parse_ai_response(
         processed[index] = {
 
             "event_id":
-                event_id
+                pieces[1].strip()
                 or
                 f"EVENT_{index}",
 
             "impact":
                 impact,
 
+            "display_region":
+                REGION_CODE_TO_LABEL.get(
+                    region,
+                    "🌍 Мир"
+                ),
+
             "title_ru":
-                title_ru,
+                pieces[4].strip(),
 
             "summary_ru":
-                summary_ru,
+                pieces[5].strip(),
         }
 
     return processed
 
-
-# =========================================================
-# AI ОБРАБОТКА НОВОСТЕЙ
-# =========================================================
 
 def process_articles_with_ai(
     articles
@@ -815,13 +879,9 @@ def process_articles_with_ai(
         articles
     )
 
-    groq_text = call_groq(
-        prompt
-    )
-
     groq_result = parse_ai_response(
-        groq_text,
-        len(articles),
+        call_groq(prompt),
+        len(articles)
     )
 
     if (
@@ -829,16 +889,12 @@ def process_articles_with_ai(
         ==
         len(articles)
     ):
+
         return groq_result
 
-
-    gemini_text = call_gemini(
-        prompt
-    )
-
     gemini_result = parse_ai_response(
-        gemini_text,
-        len(articles),
+        call_gemini(prompt),
+        len(articles)
     )
 
     if (
@@ -846,8 +902,8 @@ def process_articles_with_ai(
         ==
         len(articles)
     ):
-        return gemini_result
 
+        return gemini_result
 
     merged = dict(
         groq_result
@@ -857,19 +913,13 @@ def process_articles_with_ai(
         gemini_result.items()
     ):
 
-        if index not in merged:
-            merged[index] = item
+        merged.setdefault(
+            index,
+            item
+        )
 
+    return merged or None
 
-    if merged:
-        return merged
-
-    return None
-
-
-# =========================================================
-# FALLBACK
-# =========================================================
 
 def fallback_processed(
     articles,
@@ -884,29 +934,31 @@ def fallback_processed(
         articles
     ):
 
-        if index in result:
-            continue
+        result.setdefault(
+            index,
+            {
+                "event_id":
+                    f"FALLBACK_{index}",
 
-        result[index] = {
+                "impact":
+                    "MEDIUM",
 
-            "event_id":
-                f"FALLBACK_{index}",
+                "display_region":
+                    article["source_region"],
 
-            "impact":
-                "MEDIUM",
+                "title_ru":
+                    article["title"],
 
-            "title_ru":
-                article["title"],
-
-            "summary_ru":
-                "",
-        }
+                "summary_ru":
+                    "",
+            }
+        )
 
     return result
 
 
 # =========================================================
-# ГРУППИРОВКА СОБЫТИЙ
+# ОБЪЕДИНЕНИЕ СОБЫТИЙ
 # =========================================================
 
 def group_articles(
@@ -927,22 +979,7 @@ def group_articles(
 
         event_id = data.get(
             "event_id",
-            f"FALLBACK_{index}",
-        )
-
-        title_ru = data.get(
-            "title_ru",
-            article["title"],
-        )
-
-        summary_ru = data.get(
-            "summary_ru",
-            "",
-        )
-
-        impact = data.get(
-            "impact",
-            "MEDIUM",
+            f"FALLBACK_{index}"
         )
 
         if event_id not in events:
@@ -950,60 +987,53 @@ def group_articles(
             events[event_id] = {
 
                 "region":
-                    article["region"],
+                    data.get(
+                        "display_region",
+                        article["source_region"]
+                    ),
 
                 "title":
-                    title_ru,
+                    data.get(
+                        "title_ru",
+                        article["title"]
+                    ),
 
                 "summary":
-                    summary_ru,
+                    data.get(
+                        "summary_ru",
+                        ""
+                    ),
 
                 "impact":
-                    impact,
+                    data.get(
+                        "impact",
+                        "MEDIUM"
+                    ),
 
                 "sources":
                     [],
             }
 
-        else:
-
-            old_impact = (
-                events[event_id]
-                ["impact"]
-            )
-
-            if (
-                IMPACT_RANK[impact]
-                >
-                IMPACT_RANK[old_impact]
-            ):
-
-                events[event_id][
-                    "impact"
-                ] = impact
-
-
         events[event_id][
             "sources"
-        ].append({
+        ].append(
+            {
+                "name":
+                    article["source"],
 
-            "name":
-                article["source"],
-
-            "link":
-                article["link"],
-        })
+                "link":
+                    article["link"],
+            }
+        )
 
     return list(
         events.values()
     )
 
 
-# =========================================================
-# УНИКАЛЬНЫЕ ИСТОЧНИКИ
-# =========================================================
-
-def unique_sources(sources):
+def unique_sources(
+    sources
+):
 
     result = []
     seen = set()
@@ -1019,25 +1049,24 @@ def unique_sources(sources):
             source.get(
                 "link",
                 ""
-            ),
+            )
         )
 
-        if key in seen:
-            continue
+        if key not in seen:
 
-        seen.add(
-            key
-        )
+            seen.add(
+                key
+            )
 
-        result.append(
-            source
-        )
+            result.append(
+                source
+            )
 
     return result
 
 
 # =========================================================
-# СОХРАНЕНИЕ КАРТОЧЕК ДЛЯ INLINE-КНОПОК
+# КНОПКИ ПОД НОВОСТЬЮ
 # =========================================================
 
 def save_event_card(
@@ -1045,37 +1074,35 @@ def save_event_card(
     event
 ):
 
-    event_id = uuid.uuid4().hex[:12]
-
-    cards = application.bot_data.setdefault(
-        "event_cards",
-        {}
+    card_id = (
+        uuid.uuid4()
+        .hex[:12]
     )
 
-    cards[event_id] = event
+    cards = (
+        application.bot_data
+        .setdefault(
+            "event_cards",
+            {}
+        )
+    )
 
+    cards[card_id] = event
 
-    # Чтобы память не росла бесконечно
     while len(cards) > 300:
 
-        oldest_key = next(
-            iter(cards)
-        )
-
         cards.pop(
-            oldest_key,
+            next(
+                iter(cards)
+            ),
             None
         )
 
-    return event_id
+    return card_id
 
-
-# =========================================================
-# КНОПКИ ПОД НОВОСТЬЮ
-# =========================================================
 
 def make_news_keyboard(
-    event_id
+    card_id
 ):
 
     return InlineKeyboardMarkup(
@@ -1084,29 +1111,26 @@ def make_news_keyboard(
                 InlineKeyboardButton(
                     "📖 Подробнее",
                     callback_data=
-                        f"d:{event_id}",
+                        f"d:{card_id}"
                 ),
 
                 InlineKeyboardButton(
                     "💡 Почему важно?",
                     callback_data=
-                        f"w:{event_id}",
+                        f"w:{card_id}"
                 ),
             ],
+
             [
                 InlineKeyboardButton(
                     "🗞 Источники",
                     callback_data=
-                        f"s:{event_id}",
-                ),
+                        f"s:{card_id}"
+                )
             ],
         ]
     )
 
-
-# =========================================================
-# ОТПРАВКА СОБЫТИЙ
-# =========================================================
 
 async def send_events(
     update,
@@ -1116,15 +1140,17 @@ async def send_events(
 
     for event in events:
 
-        sources = unique_sources(
-            event["sources"]
+        event["sources"] = (
+            unique_sources(
+                event["sources"]
+            )
         )
-
-        event["sources"] = sources
 
         source_names = []
 
-        for source in sources:
+        for source in (
+            event["sources"]
+        ):
 
             if (
                 source["name"]
@@ -1134,7 +1160,6 @@ async def send_events(
                 source_names.append(
                     source["name"]
                 )
-
 
         if len(source_names) == 1:
 
@@ -1148,17 +1173,16 @@ async def send_events(
             sources_text = (
                 f"🗞 Источников: "
                 f"{len(source_names)} — "
-                + " • ".join(
+                +
+                " • ".join(
                     source_names
                 )
             )
-
 
         message = (
             f"{event['region']}\n\n"
             f"📰 {event['title']}\n"
         )
-
 
         if event["summary"]:
 
@@ -1167,121 +1191,69 @@ async def send_events(
                 f"{event['summary']}\n"
             )
 
-
         message += (
             f"\n{sources_text}"
         )
-
 
         card_id = save_event_card(
             context.application,
             event
         )
 
+        await update.message.reply_text(
+            message,
 
-        try:
+            disable_web_page_preview=True,
 
-            await update.message.reply_text(
-                message,
-                disable_web_page_preview=True,
-                reply_markup=
-                    make_news_keyboard(
-                        card_id
-                    ),
-            )
-
-        except Exception as error:
-
-            print(
-                "Telegram send error:",
-                repr(error),
-            )
+            reply_markup=
+                make_news_keyboard(
+                    card_id
+                ),
+        )
 
 
 # =========================================================
-# INLINE: ПОДРОБНЕЕ
+# ПОДРОБНЕЕ / ПОЧЕМУ ВАЖНО
 # =========================================================
 
-def make_details_prompt(event):
+def make_details_prompt(
+    event
+):
 
-    sources = ", ".join(
-        source["name"]
-        for source in event["sources"]
+    return (
+        f"Заголовок: {event['title']}\n"
+        f"Описание: {event['summary']}\n\n"
+
+        "Объясни подробнее на русском "
+        "максимум в 5 коротких предложениях. "
+
+        "Используй только данные карточки. "
+        "Ничего не выдумывай. "
+
+        "Сохраняй нейтральный тон. "
+        "Если данных мало — скажи об этом."
     )
 
-    return f"""
-Ты объясняешь новостное событие пользователю.
 
-Заголовок:
-{event['title']}
+def make_why_prompt(
+    event
+):
 
-Краткое описание:
-{event['summary']}
+    return (
+        f"Заголовок: {event['title']}\n"
+        f"Описание: {event['summary']}\n\n"
 
-Источники:
-{sources}
+        "Объясни нейтрально, "
+        "почему событие может иметь значение. "
 
-Напиши более подробное объяснение
-на русском языке.
+        "2–4 коротких предложения. "
+        "Не выдумывай факты. "
+        "Не драматизируй. "
 
-Правила:
+        "Если последствия неизвестны — "
+        "скажи об этом."
+    )
 
-- максимум 5 коротких предложений;
-- используй только информацию,
-которая уже содержится в карточке;
-- не выдумывай новые факты;
-- сохраняй нейтральный тон;
-- если данных мало, прямо скажи,
-что подробностей пока недостаточно;
-- заявления и обвинения
-не представляй как доказанный факт;
-- не советуй пользователю,
-какую политическую позицию занимать.
-
-Ответь только текстом.
-""".strip()
-
-
-# =========================================================
-# INLINE: ПОЧЕМУ ВАЖНО
-# =========================================================
-
-def make_why_prompt(event):
-
-    return f"""
-Объясни нейтрально,
-почему это новостное событие
-может иметь значение.
-
-Заголовок:
-{event['title']}
-
-Описание:
-{event['summary']}
-
-Уровень масштаба:
-{event['impact']}
-
-Правила:
-
-- 2–4 коротких предложения;
-- не выдумывай новых фактов;
-- не драматизируй;
-- не агитируй;
-- не говори пользователю,
-что он должен думать;
-- если последствия пока неизвестны,
-прямо скажи об этом;
-- отделяй факты
-от возможных последствий.
-
-Ответь только текстом.
-""".strip()
-
-
-# =========================================================
-# ОБРАБОТКА INLINE-КНОПОК
-# =========================================================
 
 async def news_callback(
     update: Update,
@@ -1291,7 +1263,6 @@ async def news_callback(
     query = update.callback_query
 
     await query.answer()
-
 
     try:
 
@@ -1306,20 +1277,16 @@ async def news_callback(
 
         return
 
-
-    cards = (
+    event = (
         context.application.bot_data
         .get(
             "event_cards",
             {}
         )
+        .get(
+            card_id
+        )
     )
-
-
-    event = cards.get(
-        card_id
-    )
-
 
     if not event:
 
@@ -1330,124 +1297,9 @@ async def news_callback(
 
         return
 
-
-    # =====================================
-    # ПОДРОБНЕЕ
-    # =====================================
-
-    if action == "d":
-
-        cached = event.get(
-            "_details"
-        )
-
-        if cached:
-
-            await query.message.reply_text(
-                "📖 Подробнее\n\n"
-                + cached
-            )
-
-            return
-
-
-        wait_message = (
-            await query.message.reply_text(
-                "📖 Готовлю подробности..."
-            )
-        )
-
-
-        answer = ask_ai(
-            make_details_prompt(
-                event
-            )
-        )
-
-
-        if not answer:
-
-            await wait_message.edit_text(
-                "⚠️ AI сейчас временно "
-                "не смог подготовить подробности."
-            )
-
-            return
-
-
-        event["_details"] = answer
-
-
-        await wait_message.edit_text(
-            "📖 Подробнее\n\n"
-            + answer
-        )
-
-        return
-
-
-    # =====================================
-    # ПОЧЕМУ ВАЖНО
-    # =====================================
-
-    if action == "w":
-
-        cached = event.get(
-            "_why"
-        )
-
-        if cached:
-
-            await query.message.reply_text(
-                "💡 Почему это важно?\n\n"
-                + cached
-            )
-
-            return
-
-
-        wait_message = (
-            await query.message.reply_text(
-                "💡 Анализирую значение..."
-            )
-        )
-
-
-        answer = ask_ai(
-            make_why_prompt(
-                event
-            )
-        )
-
-
-        if not answer:
-
-            await wait_message.edit_text(
-                "⚠️ AI сейчас временно "
-                "не смог сделать объяснение."
-            )
-
-            return
-
-
-        event["_why"] = answer
-
-
-        await wait_message.edit_text(
-            "💡 Почему это важно?\n\n"
-            + answer
-        )
-
-        return
-
-
-    # =====================================
-    # ИСТОЧНИКИ
-    # =====================================
-
     if action == "s":
 
-        source_buttons = []
+        buttons = []
 
         for source in event["sources"]:
 
@@ -1456,52 +1308,472 @@ async def news_callback(
                 ""
             )
 
-            if not (
-                link.startswith(
-                    "http://"
-                )
-                or
-                link.startswith(
+            if link.startswith(
+                (
+                    "http://",
                     "https://"
                 )
             ):
-                continue
 
+                buttons.append(
+                    [
+                        InlineKeyboardButton(
+                            "🔗 "
+                            + source["name"],
 
-            source_buttons.append(
-                [
-                    InlineKeyboardButton(
-                        "🔗 "
-                        + source["name"],
-                        url=link,
+                            url=link
+                        )
+                    ]
+                )
+
+        if buttons:
+
+            await query.message.reply_text(
+                "🗞 Открыть источники:",
+
+                reply_markup=
+                    InlineKeyboardMarkup(
+                        buttons
                     )
-                ]
             )
 
-
-        if not source_buttons:
+        else:
 
             await query.message.reply_text(
                 "Для этой новости "
                 "нет доступных ссылок."
             )
 
-            return
+        return
 
+    if action == "d":
+
+        cache_key = "_details"
+        title = "📖 Подробнее"
+        wait_text = "📖 Готовлю подробности..."
+        prompt = make_details_prompt(
+            event
+        )
+
+    else:
+
+        cache_key = "_why"
+        title = "💡 Почему это важно?"
+        wait_text = "💡 Анализирую значение..."
+        prompt = make_why_prompt(
+            event
+        )
+
+    if event.get(
+        cache_key
+    ):
 
         await query.message.reply_text(
-            "🗞 Открыть источники:",
-            reply_markup=
-                InlineKeyboardMarkup(
-                    source_buttons
-                ),
+            title
+            + "\n\n"
+            + event[cache_key]
         )
 
         return
 
+    wait_message = (
+        await query.message.reply_text(
+            wait_text
+        )
+    )
+
+    answer = ask_ai(
+        prompt
+    )
+
+    if not answer:
+
+        await wait_message.edit_text(
+            "⚠️ AI сейчас временно "
+            "не смог подготовить ответ."
+        )
+
+        return
+
+    event[cache_key] = answer
+
+    await wait_message.edit_text(
+        title
+        + "\n\n"
+        + answer
+    )
+
 
 # =========================================================
-# ОСНОВНОЙ ЗАПРОС НОВОСТЕЙ
+# 💰 ФИНАНСЫ — БЕЗ AI
+# =========================================================
+
+def xml_child_text(
+    item,
+    name
+):
+
+    for child in list(
+        item
+    ):
+
+        if (
+            child.tag
+            .split("}")[-1]
+            .lower()
+            ==
+            name.lower()
+        ):
+
+            return (
+                child.text
+                or
+                ""
+            ).strip()
+
+    return ""
+
+
+def to_float(
+    value
+):
+
+    if value is None:
+        return None
+
+    match = re.search(
+        r"-?\d+(?:[.,]\d+)?",
+        str(value)
+        .replace(
+            " ",
+            ""
+        )
+    )
+
+    if not match:
+        return None
+
+    try:
+
+        return float(
+            match.group(0)
+            .replace(
+                ",",
+                "."
+            )
+        )
+
+    except ValueError:
+
+        return None
+
+
+def fetch_nbk_rates():
+
+    response = requests.get(
+
+        "https://nationalbank.kz/"
+        "rss/rates_all.xml",
+
+        headers={
+            "User-Agent":
+                "Mozilla/5.0 NewsBot/1.0"
+        },
+
+        timeout=20,
+    )
+
+    response.raise_for_status()
+
+    root = ET.fromstring(
+        response.content
+    )
+
+    wanted = {
+        "USD",
+        "EUR",
+        "GBP",
+        "CNY",
+        "RUB",
+    }
+
+    rates = {}
+
+    for item in root.iter():
+
+        if (
+            item.tag
+            .split("}")[-1]
+            .lower()
+            !=
+            "item"
+        ):
+
+            continue
+
+        code = (
+            xml_child_text(
+                item,
+                "title"
+            )
+            .upper()
+            .strip()
+        )
+
+        if code not in wanted:
+            continue
+
+        value = to_float(
+            xml_child_text(
+                item,
+                "description"
+            )
+        )
+
+        quantity = (
+            to_float(
+                xml_child_text(
+                    item,
+                    "quant"
+                )
+            )
+            or
+            1.0
+        )
+
+        if value is None:
+            continue
+
+        if quantity <= 0:
+            quantity = 1.0
+
+        # НБК иногда публикует курс
+        # за несколько единиц валюты.
+        # Пересчитываем на 1 единицу.
+        rates[code] = (
+            value
+            /
+            quantity
+        )
+
+    return rates
+
+
+def fetch_coinbase_spot(
+    pair
+):
+
+    response = requests.get(
+
+        f"https://api.coinbase.com/"
+        f"v2/prices/{pair}/spot",
+
+        headers={
+            "User-Agent":
+                "Mozilla/5.0 NewsBot/1.0"
+        },
+
+        timeout=20,
+    )
+
+    response.raise_for_status()
+
+    return to_float(
+        response.json()
+        .get(
+            "data",
+            {}
+        )
+        .get(
+            "amount"
+        )
+    )
+
+
+def format_usd_price(
+    value
+):
+
+    if value is None:
+        return "н/д"
+
+    if value >= 1000:
+
+        return (
+            f"${value:,.0f}"
+            .replace(
+                ",",
+                " "
+            )
+        )
+
+    return (
+        f"${value:,.2f}"
+        .replace(
+            ",",
+            " "
+        )
+    )
+
+
+async def markets(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    message = (
+        await update.message.reply_text(
+            "💰 Обновляю финансовые данные..."
+        )
+    )
+
+    try:
+
+        rates = fetch_nbk_rates()
+
+    except Exception as error:
+
+        print(
+            "NBK error:",
+            repr(error)
+        )
+
+        rates = {}
+
+    try:
+
+        btc = fetch_coinbase_spot(
+            "BTC-USD"
+        )
+
+    except Exception as error:
+
+        print(
+            "BTC error:",
+            repr(error)
+        )
+
+        btc = None
+
+    try:
+
+        eth = fetch_coinbase_spot(
+            "ETH-USD"
+        )
+
+    except Exception as error:
+
+        print(
+            "ETH error:",
+            repr(error)
+        )
+
+        eth = None
+
+    lines = [
+        "💰 Финансы",
+        "",
+    ]
+
+    if rates:
+
+        lines.append(
+            "💱 Официальный курс НБК"
+        )
+
+        currencies = [
+            (
+                "USD",
+                "🇺🇸",
+                "доллар"
+            ),
+
+            (
+                "EUR",
+                "🇪🇺",
+                "евро"
+            ),
+
+            (
+                "GBP",
+                "🇬🇧",
+                "фунт стерлингов"
+            ),
+
+            (
+                "CNY",
+                "🇨🇳",
+                "юань"
+            ),
+
+            (
+                "RUB",
+                "🇷🇺",
+                "рубль"
+            ),
+        ]
+
+        for (
+            code,
+            emoji,
+            name
+        ) in currencies:
+
+            value = rates.get(
+                code
+            )
+
+            if value is not None:
+
+                lines.append(
+                    f"{emoji} "
+                    f"1 {code} "
+                    f"({name}) = "
+                    f"{value:.2f} ₸"
+                )
+
+    else:
+
+        lines.append(
+            "💱 Курсы НБК "
+            "сейчас недоступны"
+        )
+
+    lines += [
+        "",
+        "🪙 Крипто",
+
+        "₿ BTC/USD ≈ "
+        + format_usd_price(
+            btc
+        ),
+
+        "◆ ETH/USD ≈ "
+        + format_usd_price(
+            eth
+        ),
+
+        "",
+
+        "🏦 Валюты — официальный курс "
+        "Национального Банка Казахстана.",
+
+        "🪙 Крипто — публичная "
+        "spot-цена Coinbase.",
+
+        "ℹ️ Курс НБК — не курс покупки/"
+        "продажи в банке или обменнике.",
+    ]
+
+    await message.edit_text(
+        "\n".join(
+            lines
+        )
+    )
+
+
+# =========================================================
+# НОВОСТИ
 # =========================================================
 
 async def run_news_request(
@@ -1516,50 +1788,40 @@ async def run_news_request(
         status_text = (
             "🔥 Ищу главное...\n"
             "🌍 Проверяю источники\n"
-            "🧠 Анализирую события\n"
-            "🇷🇺 Готовлю на русском"
+            "🧠 Анализирую события"
         )
 
     elif region_filter:
 
         status_text = (
             f"🔎 Собираю: "
-            f"{region_filter}\n"
-            "🇷🇺 Перевожу "
-            "и объединяю дубли"
+            f"{region_filter}"
         )
 
     else:
 
         status_text = (
-            "🔎 Собираю новости...\n"
-            "🌍 Проверяю источники\n"
-            "🇷🇺 Перевожу\n"
-            "🧠 Объединяю одинаковые события"
+            "🔎 Собираю новости..."
         )
 
-
-    status_message = (
+    status = (
         await update.message.reply_text(
             status_text
         )
     )
 
-
     articles = collect_articles(
-        region_filter=region_filter
+        region_filter
     )
-
 
     if not articles:
 
-        await status_message.edit_text(
+        await status.edit_text(
             "❌ Сейчас не удалось "
             "получить новости."
         )
 
         return
-
 
     processed = (
         process_articles_with_ai(
@@ -1567,14 +1829,12 @@ async def run_news_request(
         )
     )
 
-
     if (
         processed is None
-        and
-        important_only
+        and important_only
     ):
 
-        await status_message.edit_text(
+        await status.edit_text(
             "⚠️ Groq и Gemini сейчас "
             "не ответили.\n"
             "Без AI я не буду угадывать, "
@@ -1583,56 +1843,69 @@ async def run_news_request(
 
         return
 
-
     ai_failed = (
         processed is None
     )
-
 
     processed = fallback_processed(
         articles,
         processed
     )
 
-
     events = group_articles(
         articles,
-        processed,
+        processed
     )
 
+    if (
+        region_filter
+        and
+        not ai_failed
+    ):
+
+        events = [
+            event
+
+            for event in events
+
+            if (
+                event["region"]
+                ==
+                region_filter
+            )
+        ]
 
     if important_only:
 
         events = [
             event
-            for event in events
-            if event["impact"] == "HIGH"
-        ][:5]
 
+            for event in events
+
+            if (
+                event["impact"]
+                ==
+                "HIGH"
+            )
+
+        ][:5]
 
     try:
 
-        await status_message.delete()
+        await status.delete()
 
     except Exception:
+
         pass
 
-
-    if (
-        important_only
-        and
-        not events
-    ):
+    if not events:
 
         await update.message.reply_text(
-            "Среди найденных публикаций "
-            "сейчас нет событий, "
-            "которые AI отнёс "
-            "к высокой важности."
+            "Подходящих свежих событий "
+            "сейчас нет."
         )
 
         return
-
 
     if ai_failed:
 
@@ -1642,16 +1915,15 @@ async def run_news_request(
             "Показываю обычные RSS."
         )
 
-
     await send_events(
         update,
         context,
-        events,
+        events
     )
 
 
 # =========================================================
-# /BRIEF
+# КРАТКО
 # =========================================================
 
 async def brief(
@@ -1659,25 +1931,22 @@ async def brief(
     context: ContextTypes.DEFAULT_TYPE
 ):
 
-    status_message = (
+    status = (
         await update.message.reply_text(
             "⚡ Собираю короткую сводку..."
         )
     )
 
-
     articles = collect_articles()
-
 
     if not articles:
 
-        await status_message.edit_text(
+        await status.edit_text(
             "❌ Сейчас не удалось "
             "получить новости."
         )
 
         return
-
 
     processed = (
         process_articles_with_ai(
@@ -1685,85 +1954,79 @@ async def brief(
         )
     )
 
+    if processed is None:
 
-    processed = fallback_processed(
-        articles,
-        processed
-    )
+        await status.edit_text(
+            "⚠️ AI сейчас не ответил.\n"
+            "Без него не буду "
+            "составлять сводку наугад."
+        )
 
+        return
 
     events = group_articles(
+
         articles,
-        processed,
+
+        fallback_processed(
+            articles,
+            processed
+        )
     )
 
-
-    # Сначала HIGH, затем MEDIUM, затем LOW.
-    # При одинаковой важности выше событие,
-    # которое встретилось у большего числа источников.
     events.sort(
+
         key=lambda event: (
+
             IMPACT_RANK.get(
                 event["impact"],
                 0
             ),
+
             len(
                 unique_sources(
                     event["sources"]
                 )
             ),
         ),
-        reverse=True,
+
+        reverse=True
     )
-
-
-    top_events = events[:5]
-
 
     try:
 
-        await status_message.delete()
+        await status.delete()
 
     except Exception:
+
         pass
 
+    top_events = events[:5]
 
-    if not top_events:
+    text = (
+        "⚡ Коротко: 5 событий\n\n"
+        +
+        "\n\n".join(
 
-        await update.message.reply_text(
-            "Пока нечего добавить "
-            "в краткую сводку."
-        )
-
-        return
-
-
-    lines = [
-        "⚡ Коротко: 5 событий\n"
-    ]
-
-
-    for number, event in enumerate(
-        top_events,
-        start=1
-    ):
-
-        lines.append(
             f"{number}. "
             f"{event['region']} "
             f"{event['title']}"
-        )
 
+            for number, event
+            in enumerate(
+                top_events,
+                1
+            )
+        )
+    )
 
     await update.message.reply_text(
-        "\n\n".join(
-            lines
-        )
+        text
     )
 
 
 # =========================================================
-# /START
+# КОМАНДЫ
 # =========================================================
 
 async def start(
@@ -1772,20 +2035,20 @@ async def start(
 ):
 
     await update.message.reply_text(
+
         "👋 Привет!\n\n"
+
         "Я собираю новости "
         "из разных источников, "
         "перевожу их на русский "
         "и объединяю одинаковые события.\n\n"
+
         "Выбирай раздел 👇",
 
-        reply_markup=MAIN_MENU,
+        reply_markup=
+            MAIN_MENU,
     )
 
-
-# =========================================================
-# /MENU
-# =========================================================
 
 async def menu(
     update: Update,
@@ -1794,13 +2057,11 @@ async def menu(
 
     await update.message.reply_text(
         "Выбирай раздел 👇",
-        reply_markup=MAIN_MENU,
+
+        reply_markup=
+            MAIN_MENU
     )
 
-
-# =========================================================
-# /NEWS
-# =========================================================
 
 async def news(
     update: Update,
@@ -1809,13 +2070,9 @@ async def news(
 
     await run_news_request(
         update,
-        context,
+        context
     )
 
-
-# =========================================================
-# /IMPORTANT
-# =========================================================
 
 async def important(
     update: Update,
@@ -1825,13 +2082,20 @@ async def important(
     await run_news_request(
         update,
         context,
-        important_only=True,
+        important_only=True
     )
 
 
-# =========================================================
-# КОМАНДЫ СТРАН
-# =========================================================
+async def manutd(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    await update.message.reply_text(
+        "Муха лох.\n"
+        "Слабый везде 🤣"
+    )
+
 
 async def region_command(
     update: Update,
@@ -1846,38 +2110,24 @@ async def region_command(
         .lower()
     )
 
-
-    region = COMMAND_TO_REGION.get(
-        command
+    region = (
+        COMMAND_TO_REGION.get(
+            command
+        )
     )
-
 
     if region:
 
         await run_news_request(
             update,
             context,
-            region_filter=region,
+            region_filter=
+                region
         )
 
 
 # =========================================================
-# /MANUTD 😈
-# =========================================================
-
-async def manutd(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    await update.message.reply_text(
-        "Муха лох.\n"
-        "Слабый везде 🤣"
-    )
-
-
-# =========================================================
-# /STATUS
+# STATUS
 # =========================================================
 
 def test_groq_connection():
@@ -1896,12 +2146,13 @@ def test_groq_connection():
     try:
 
         response = requests.get(
+
             "https://api.groq.com/"
             "openai/v1/models",
 
             headers={
                 "Authorization":
-                    f"Bearer {api_key}",
+                    f"Bearer {api_key}"
             },
 
             timeout=15,
@@ -1915,8 +2166,7 @@ def test_groq_connection():
                 f"{response.status_code}"
             )
 
-
-        model_ids = {
+        models = {
             item.get(
                 "id"
             )
@@ -1930,21 +2180,17 @@ def test_groq_connection():
             )
         }
 
-
-        if GROQ_MODEL in model_ids:
+        if GROQ_MODEL in models:
 
             return (
                 True,
                 "API и модель доступны"
             )
 
-
         return (
             False,
-            "API работает, "
-            "но модель не найдена"
+            "модель не найдена"
         )
-
 
     except Exception:
 
@@ -1967,10 +2213,10 @@ def test_gemini_connection():
             "нет ключа"
         )
 
-
     try:
 
         response = requests.get(
+
             "https://generativelanguage.googleapis.com/"
             "v1beta/models",
 
@@ -1982,7 +2228,6 @@ def test_gemini_connection():
             timeout=15,
         )
 
-
         if response.status_code != 200:
 
             return (
@@ -1991,8 +2236,8 @@ def test_gemini_connection():
                 f"{response.status_code}"
             )
 
+        models = {
 
-        model_names = {
             item.get(
                 "name",
                 ""
@@ -2010,21 +2255,17 @@ def test_gemini_connection():
             )
         }
 
-
-        if GEMINI_MODEL in model_names:
+        if GEMINI_MODEL in models:
 
             return (
                 True,
                 "API и модель доступны"
             )
 
-
         return (
             False,
-            "API работает, "
-            "но модель не найдена"
+            "модель не найдена"
         )
-
 
     except Exception:
 
@@ -2045,16 +2286,13 @@ async def status(
         )
     )
 
-
     groq_ok, groq_info = (
         test_groq_connection()
     )
 
-
     gemini_ok, gemini_info = (
         test_gemini_connection()
     )
-
 
     await message.edit_text(
         "🤖 Статус AI\n\n"
@@ -2070,7 +2308,7 @@ async def status(
 
 
 # =========================================================
-# КНОПКИ ГЛАВНОГО МЕНЮ
+# КНОПКИ МЕНЮ
 # =========================================================
 
 async def menu_buttons(
@@ -2083,63 +2321,59 @@ async def menu_buttons(
         .strip()
     )
 
-
     if text == "🔥 Главное":
 
-        await important(
+        return await important(
             update,
             context
         )
-
-        return
-
 
     if text == "⚡ Кратко":
 
-        await brief(
+        return await brief(
             update,
             context
         )
-
-        return
-
 
     if text == "📰 Все новости":
 
-        await news(
+        return await news(
             update,
             context
         )
 
-        return
+    if text == "💰 Финансы":
 
+        return await markets(
+            update,
+            context
+        )
 
-    region = BUTTON_TO_REGION.get(
-        text
+    region = (
+        BUTTON_TO_REGION.get(
+            text
+        )
     )
-
 
     if region:
 
-        await run_news_request(
+        return await run_news_request(
             update,
             context,
-            region_filter=region,
+            region_filter=
+                region
         )
 
-        return
-
-
     await update.message.reply_text(
-        "Выбери раздел "
-        "кнопками ниже 👇",
+        "Выбери раздел кнопками ниже 👇",
 
-        reply_markup=MAIN_MENU,
+        reply_markup=
+            MAIN_MENU
     )
 
 
 # =========================================================
-# TELEGRAM COMMAND MENU
+# СПИСОК КОМАНД TELEGRAM
 # =========================================================
 
 async def post_init(
@@ -2161,6 +2395,11 @@ async def post_init(
             BotCommand(
                 "important",
                 "Главные события"
+            ),
+
+            BotCommand(
+                "markets",
+                "Финансы"
             ),
 
             BotCommand(
@@ -2218,122 +2457,112 @@ async def post_init(
 def main():
 
     threading.Thread(
-        target=run_web_server,
-        daemon=True,
+        target=
+            run_web_server,
+
+        daemon=True
     ).start()
-
-
-    telegram_token = os.environ[
-        "TELEGRAM_BOT_TOKEN"
-    ]
-
 
     app = (
         Application.builder()
+
         .token(
-            telegram_token
+            os.environ[
+                "TELEGRAM_BOT_TOKEN"
+            ]
         )
+
         .post_init(
             post_init
         )
+
         .build()
     )
 
-
-    app.add_handler(
-        CommandHandler(
+    handlers = [
+        (
             "start",
-            start,
-        )
-    )
+            start
+        ),
 
-
-    app.add_handler(
-        CommandHandler(
+        (
             "menu",
-            menu,
-        )
-    )
+            menu
+        ),
 
-
-    app.add_handler(
-        CommandHandler(
+        (
             "news",
-            news,
-        )
-    )
+            news
+        ),
 
-
-    app.add_handler(
-        CommandHandler(
+        (
             "brief",
-            brief,
-        )
-    )
+            brief
+        ),
 
-
-    app.add_handler(
-        CommandHandler(
+        (
             "important",
-            important,
-        )
-    )
+            important
+        ),
 
+        (
+            "markets",
+            markets
+        ),
 
-    app.add_handler(
-        CommandHandler(
+        (
             "status",
-            status,
-        )
-    )
+            status
+        ),
 
+        (
+            "manutd",
+            manutd
+        ),
+    ]
+
+    for command, function in handlers:
+
+        app.add_handler(
+            CommandHandler(
+                command,
+                function
+            )
+        )
 
     for command in COMMAND_TO_REGION:
 
         app.add_handler(
             CommandHandler(
                 command,
-                region_command,
+                region_command
             )
         )
 
-
-    # Скрытая пасхалка 😈
-    app.add_handler(
-        CommandHandler(
-            "manutd",
-            manutd,
-        )
-    )
-
-
-    # Inline-кнопки под новостями
     app.add_handler(
         CallbackQueryHandler(
             news_callback
         )
     )
 
-
-    # Главное меню
     app.add_handler(
         MessageHandler(
+
             filters.TEXT
             &
             ~filters.COMMAND,
 
-            menu_buttons,
+            menu_buttons
         )
     )
-
 
     print(
         "Telegram bot started"
     )
 
-
     app.run_polling()
 
 
 if __name__ == "__main__":
+
     main()
