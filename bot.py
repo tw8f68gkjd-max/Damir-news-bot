@@ -1,6 +1,5 @@
 import os
 import threading
-import html
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import feedparser
@@ -10,23 +9,13 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 
 NEWS_FEEDS = {
-    "🌍 Мир": {
-        "url": "https://subscribe.stripes.com/rss/top-news.xml",
-        "lang": "en"
-    },
-    "🇺🇸 США": {
-        "url": "https://subscribe.stripes.com/rss/us.xml",
-        "lang": "en"
-    },
-    "🇪🇺 Европа": {
-        "url": "https://subscribe.stripes.com/rss/europe.xml",
-        "lang": "en"
-    },
-    "🇨🇳 Китай": {
-        "url": "https://www.chinanews.com.cn/rss/china.xml",
-        "lang": "zh-CN"
-    },
+    "🌍 Мир": "https://subscribe.stripes.com/rss/top-news.xml",
+    "🇺🇸 США": "https://subscribe.stripes.com/rss/us.xml",
+    "🇪🇺 Европа": "https://subscribe.stripes.com/rss/europe.xml",
+    "🇨🇳 Китай": "https://www.chinanews.com.cn/rss/china.xml",
 }
+
+GEMINI_MODEL = "gemini-3.8-flash"
 
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -47,38 +36,102 @@ def run_web_server():
     server.serve_forever()
 
 
-def translate_to_russian(text, source_lang):
+def gemini_translate(text):
+    api_key = os.environ.get("GEMINI_API_KEY")
+
+    if not api_key:
+        print("GEMINI_API_KEY is missing")
+        return None
+
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/"
+        f"models/{GEMINI_MODEL}:generateContent"
+    )
+
+    prompt = f"""
+Переведи следующий заголовок новости на естественный русский язык.
+
+Правила:
+- передай смысл максимально точно;
+- не добавляй фактов от себя;
+- имена, страны, компании, даты и числа не искажай;
+- не объясняй перевод;
+- не используй кавычки вокруг всего ответа;
+- верни ТОЛЬКО русский заголовок.
+
+Заголовок:
+{text}
+"""
+
     try:
-        response = requests.get(
-            "https://api.mymemory.translated.net/get",
-            params={
-                "q": text,
-                "langpair": f"{source_lang}|ru"
+        response = requests.post(
+            url,
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": api_key,
             },
-            timeout=15
+            json={
+                "contents": [
+                    {
+                        "parts": [
+                            {"text": prompt}
+                        ]
+                    }
+                ]
+            },
+            timeout=30,
         )
 
-        response.raise_for_status()
+        if response.status_code != 200:
+            print(
+                "Gemini error:",
+                response.status_code,
+                response.text[:500],
+            )
+            return None
+
         data = response.json()
 
-        translated = data.get("responseData", {}).get("translatedText")
+        translated = (
+            data["candidates"][0]
+            ["content"]["parts"][0]["text"]
+            .strip()
+        )
 
-        if translated:
-            return html.unescape(translated)
+        return translated
 
     except Exception as e:
-        print(f"Translation error: {e}")
-
-    # Если переводчик временно недоступен,
-    # бот всё равно покажет оригинальный заголовок.
-    return text
+        print(f"Gemini translation error: {e}")
+        return None
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Я работаю.\n\n"
-        "Команда /news — последние новости на русском 🌍"
+        "📰 /news — последние новости\n"
+        "🧪 /testai — проверить перевод через Gemini"
     )
+
+
+async def test_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🧪 Проверяю Gemini..."
+    )
+
+    original = "Major technology companies announce new AI investments"
+
+    translated = gemini_translate(original)
+
+    if translated:
+        await update.message.reply_text(
+            f"✅ Gemini работает!\n\n"
+            f"🇷🇺 {translated}"
+        )
+    else:
+        await update.message.reply_text(
+            "❌ Gemini пока не отвечает.\n"
+            "Посмотрим логи Render."
+        )
 
 
 async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -88,34 +141,45 @@ async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     found = 0
 
-    for category, source in NEWS_FEEDS.items():
-
-        feed = feedparser.parse(source["url"])
+    for category, url in NEWS_FEEDS.items():
+        feed = feedparser.parse(url)
 
         if not feed.entries:
             continue
 
         article = feed.entries[0]
 
-        original_title = article.get("title", "Без заголовка")
-        link = article.get("link", "")
-
-        russian_title = translate_to_russian(
-            original_title,
-            source["lang"]
+        original_title = article.get(
+            "title",
+            "Без заголовка"
         )
 
-        source_name = feed.feed.get("title", "Источник")
+        link = article.get("link", "")
+        source_name = feed.feed.get(
+            "title",
+            "Источник"
+        )
+
+        russian_title = gemini_translate(
+            original_title
+        )
+
+        if russian_title:
+            title_to_show = russian_title
+        else:
+            title_to_show = (
+                f"{original_title}\n"
+                "⚠️ Перевод временно недоступен"
+            )
 
         message = (
             f"{category}\n\n"
-            f"📰 {russian_title}\n\n"
+            f"📰 {title_to_show}\n\n"
             f"🗞 {source_name}\n"
             f"🔗 {link}"
         )
 
         await update.message.reply_text(message)
-
         found += 1
 
     if found == 0:
@@ -139,8 +203,17 @@ def main():
 
     app = Application.builder().token(token).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("news", news))
+    app.add_handler(
+        CommandHandler("start", start)
+    )
+
+    app.add_handler(
+        CommandHandler("news", news)
+    )
+
+    app.add_handler(
+        CommandHandler("testai", test_ai)
+    )
 
     print("Telegram bot started")
 
@@ -149,6 +222,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
