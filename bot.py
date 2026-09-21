@@ -1,18 +1,31 @@
 import os
 import threading
+import html
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import feedparser
+import requests
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 
-# Первые источники для теста
 NEWS_FEEDS = {
-    "🌍 Мир": "https://subscribe.stripes.com/rss/top-news.xml",
-    "🇺🇸 США": "https://subscribe.stripes.com/rss/us.xml",
-    "🇪🇺 Европа": "https://subscribe.stripes.com/rss/europe.xml",
-    "🇨🇳 Китай": "https://www.chinanews.com.cn/rss/china.xml",
+    "🌍 Мир": {
+        "url": "https://subscribe.stripes.com/rss/top-news.xml",
+        "lang": "en"
+    },
+    "🇺🇸 США": {
+        "url": "https://subscribe.stripes.com/rss/us.xml",
+        "lang": "en"
+    },
+    "🇪🇺 Европа": {
+        "url": "https://subscribe.stripes.com/rss/europe.xml",
+        "lang": "en"
+    },
+    "🇨🇳 Китай": {
+        "url": "https://www.chinanews.com.cn/rss/china.xml",
+        "lang": "zh-CN"
+    },
 }
 
 
@@ -34,36 +47,75 @@ def run_web_server():
     server.serve_forever()
 
 
+def translate_to_russian(text, source_lang):
+    try:
+        response = requests.get(
+            "https://api.mymemory.translated.net/get",
+            params={
+                "q": text,
+                "langpair": f"{source_lang}|ru"
+            },
+            timeout=15
+        )
+
+        response.raise_for_status()
+        data = response.json()
+
+        translated = data.get("responseData", {}).get("translatedText")
+
+        if translated:
+            return html.unescape(translated)
+
+    except Exception as e:
+        print(f"Translation error: {e}")
+
+    # Если переводчик временно недоступен,
+    # бот всё равно покажет оригинальный заголовок.
+    return text
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Я работаю.\n\n"
-        "Команда /news — последние новости 🌍"
+        "Команда /news — последние новости на русском 🌍"
     )
 
 
 async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔎 Собираю свежие новости...")
+    status_message = await update.message.reply_text(
+        "🔎 Собираю и перевожу свежие новости..."
+    )
 
     found = 0
 
-    for category, url in NEWS_FEEDS.items():
-        feed = feedparser.parse(url)
+    for category, source in NEWS_FEEDS.items():
+
+        feed = feedparser.parse(source["url"])
 
         if not feed.entries:
             continue
 
         article = feed.entries[0]
 
-        title = article.get("title", "Без заголовка")
+        original_title = article.get("title", "Без заголовка")
         link = article.get("link", "")
+
+        russian_title = translate_to_russian(
+            original_title,
+            source["lang"]
+        )
+
+        source_name = feed.feed.get("title", "Источник")
 
         message = (
             f"{category}\n\n"
-            f"📰 {title}\n\n"
+            f"📰 {russian_title}\n\n"
+            f"🗞 {source_name}\n"
             f"🔗 {link}"
         )
 
         await update.message.reply_text(message)
+
         found += 1
 
     if found == 0:
@@ -71,9 +123,17 @@ async def news(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Не удалось получить новости. Попробуй позже."
         )
 
+    try:
+        await status_message.delete()
+    except Exception:
+        pass
+
 
 def main():
-    threading.Thread(target=run_web_server, daemon=True).start()
+    threading.Thread(
+        target=run_web_server,
+        daemon=True
+    ).start()
 
     token = os.environ["TELEGRAM_BOT_TOKEN"]
 
@@ -83,8 +143,12 @@ def main():
     app.add_handler(CommandHandler("news", news))
 
     print("Telegram bot started")
+
     app.run_polling()
 
 
 if __name__ == "__main__":
     main()
+
+
+
