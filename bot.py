@@ -20,13 +20,14 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 GROQ_MODEL = 'openai/gpt-oss-20b'
 GEMINI_MODEL = 'gemini-3.8-flash'
 ARTICLES_PER_FEED = 8
+KZ_ARTICLES_PER_FEED = 30
 FRESH_HOURS = 24
 MAX_AI_ARTICLES = 36
 AI_BATCH_SIZE = 12
 MAX_NEWS_EVENTS = 15
 MAX_REGION_EVENTS = 10
 MAX_SPORT_EVENTS = 12
-NEWS_FEEDS = [{'region': '🇰🇿 Казахстан', 'source': 'Kazinform', 'publisher': 'Kazinform', 'url': 'https://qazinform.com/rss/en.xml'}, {'region': '🇰🇿 Казахстан', 'source': 'The Astana Times', 'publisher': 'The Astana Times', 'url': 'https://astanatimes.com/feed/'}, {'region': '🇺🇸 США', 'source': 'NPR', 'publisher': 'NPR', 'url': 'https://feeds.npr.org/1003/rss.xml'}, {'region': '🇺🇸 США', 'source': 'BBC', 'publisher': 'BBC', 'url': 'https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml'}, {'region': '🇪🇺 Европа', 'source': 'Euronews', 'publisher': 'Euronews', 'url': 'https://www.euronews.com/rss?format=mrss&level=vertical&name=my-europe'}, {'region': '🇪🇺 Европа', 'source': 'BBC', 'publisher': 'BBC', 'url': 'https://feeds.bbci.co.uk/news/world/europe/rss.xml'}, {'region': '🇨🇳 Китай', 'source': 'China News Service', 'publisher': 'China News Service', 'url': 'https://www.chinanews.com.cn/rss/china.xml'}, {'region': '🇨🇳 Китай', 'source': 'BBC', 'publisher': 'BBC', 'url': 'https://feeds.bbci.co.uk/news/world/asia/china/rss.xml'}, {'region': '🇷🇺 Россия', 'source': 'Интерфакс', 'publisher': 'Интерфакс', 'url': 'https://www.interfax.ru/rss.asp'}, {'region': '🇷🇺 Россия', 'source': 'Meduza', 'publisher': 'Meduza', 'url': 'https://meduza.io/rss2/all'}, {'region': '🌍 Мир', 'source': 'Euronews', 'publisher': 'Euronews', 'url': 'https://www.euronews.com/rss?format=mrss&level=theme&name=news'}, {'region': '🌍 Мир', 'source': 'BBC', 'publisher': 'BBC', 'url': 'https://feeds.bbci.co.uk/news/world/rss.xml'}, {'region': '🤖 AI / технологии', 'source': 'TechCrunch', 'publisher': 'TechCrunch', 'url': 'https://techcrunch.com/category/artificial-intelligence/feed/'}, {'region': '🤖 AI / технологии', 'source': 'The Verge', 'publisher': 'The Verge', 'url': 'https://www.theverge.com/rss/index.xml'}, {'region': '🏆 Спорт', 'source': 'BBC Sport', 'publisher': 'BBC Sport', 'url': 'https://feeds.bbci.co.uk/sport/rss.xml'}, {'region': '🏆 Спорт', 'source': 'BBC Sport • Football', 'publisher': 'BBC Sport', 'url': 'https://feeds.bbci.co.uk/sport/football/rss.xml'}, {'region': '🏆 Спорт', 'source': 'The Guardian Sport', 'publisher': 'The Guardian', 'url': 'https://www.theguardian.com/sport/rss'}, {'region': '🏆 Спорт', 'source': 'The Guardian Football', 'publisher': 'The Guardian', 'url': 'https://www.theguardian.com/football/rss'}, {'region': '🏆 Спорт', 'source': 'CBS Sports', 'publisher': 'CBS Sports', 'url': 'https://www.cbssports.com/rss/headlines/'}, {'region': '🏆 Спорт', 'source': 'CBS Sports • Soccer', 'publisher': 'CBS Sports', 'url': 'https://www.cbssports.com/rss/headlines/soccer'}, {'region': '🏆 Спорт', 'source': 'CBS Sports • NBA', 'publisher': 'CBS Sports', 'url': 'https://www.cbssports.com/rss/headlines/nba'}, {'region': '🏆 Спорт', 'source': 'CBS Sports • Tennis', 'publisher': 'CBS Sports', 'url': 'https://www.cbssports.com/rss/headlines/tennis'}]
+NEWS_FEEDS = [{'region': '🇰🇿 Казахстан', 'source': 'Kazinform', 'publisher': 'Kazinform', 'url': 'https://qazinform.com/rss/en.xml'}, {'region': '🇰🇿 Казахстан', 'source': 'The Astana Times', 'publisher': 'The Astana Times', 'url': 'https://astanatimes.com/feed/'}, {'region': '🇰🇿 Казахстан', 'source': 'Tengrinews', 'publisher': 'Tengrinews', 'url': 'https://tengrinews.kz/news.rss/'}, {'region': '🇺🇸 США', 'source': 'NPR', 'publisher': 'NPR', 'url': 'https://feeds.npr.org/1003/rss.xml'}, {'region': '🇺🇸 США', 'source': 'BBC', 'publisher': 'BBC', 'url': 'https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml'}, {'region': '🇪🇺 Европа', 'source': 'Euronews', 'publisher': 'Euronews', 'url': 'https://www.euronews.com/rss?format=mrss&level=vertical&name=my-europe'}, {'region': '🇪🇺 Европа', 'source': 'BBC', 'publisher': 'BBC', 'url': 'https://feeds.bbci.co.uk/news/world/europe/rss.xml'}, {'region': '🇨🇳 Китай', 'source': 'China News Service', 'publisher': 'China News Service', 'url': 'https://www.chinanews.com.cn/rss/china.xml'}, {'region': '🇨🇳 Китай', 'source': 'BBC', 'publisher': 'BBC', 'url': 'https://feeds.bbci.co.uk/news/world/asia/china/rss.xml'}, {'region': '🇷🇺 Россия', 'source': 'Интерфакс', 'publisher': 'Интерфакс', 'url': 'https://www.interfax.ru/rss.asp'}, {'region': '🇷🇺 Россия', 'source': 'Meduza', 'publisher': 'Meduza', 'url': 'https://meduza.io/rss2/all'}, {'region': '🌍 Мир', 'source': 'Euronews', 'publisher': 'Euronews', 'url': 'https://www.euronews.com/rss?format=mrss&level=theme&name=news'}, {'region': '🌍 Мир', 'source': 'BBC', 'publisher': 'BBC', 'url': 'https://feeds.bbci.co.uk/news/world/rss.xml'}, {'region': '🤖 AI / технологии', 'source': 'TechCrunch', 'publisher': 'TechCrunch', 'url': 'https://techcrunch.com/category/artificial-intelligence/feed/'}, {'region': '🤖 AI / технологии', 'source': 'The Verge', 'publisher': 'The Verge', 'url': 'https://www.theverge.com/rss/index.xml'}, {'region': '🏆 Спорт', 'source': 'BBC Sport', 'publisher': 'BBC Sport', 'url': 'https://feeds.bbci.co.uk/sport/rss.xml'}, {'region': '🏆 Спорт', 'source': 'BBC Sport • Football', 'publisher': 'BBC Sport', 'url': 'https://feeds.bbci.co.uk/sport/football/rss.xml'}, {'region': '🏆 Спорт', 'source': 'The Guardian Sport', 'publisher': 'The Guardian', 'url': 'https://www.theguardian.com/sport/rss'}, {'region': '🏆 Спорт', 'source': 'The Guardian Football', 'publisher': 'The Guardian', 'url': 'https://www.theguardian.com/football/rss'}, {'region': '🏆 Спорт', 'source': 'CBS Sports', 'publisher': 'CBS Sports', 'url': 'https://www.cbssports.com/rss/headlines/'}, {'region': '🏆 Спорт', 'source': 'CBS Sports • Soccer', 'publisher': 'CBS Sports', 'url': 'https://www.cbssports.com/rss/headlines/soccer'}, {'region': '🏆 Спорт', 'source': 'CBS Sports • NBA', 'publisher': 'CBS Sports', 'url': 'https://www.cbssports.com/rss/headlines/nba'}, {'region': '🏆 Спорт', 'source': 'CBS Sports • Tennis', 'publisher': 'CBS Sports', 'url': 'https://www.cbssports.com/rss/headlines/tennis'}]
 MAIN_MENU = ReplyKeyboardMarkup([['🔥 Главное', '⚡ Кратко'], ['📰 Все новости', '🏆 Спорт'], ['💰 Финансы'], ['🇰🇿 Казахстан', '🇺🇸 США'], ['🇪🇺 Европа', '🇨🇳 Китай'], ['🇷🇺 Россия', '🌍 Мир'], ['🤖 AI / технологии']], resize_keyboard=True)
 SPORT_MENU = ReplyKeyboardMarkup([['🏆 Весь спорт'], ['⚽ Футбол', '🏎 F1'], ['🏀 Баскетбол', '🎾 Теннис'], ['⬅️ Главное меню']], resize_keyboard=True)
 REGION_BUTTONS = {'🇰🇿 Казахстан', '🇺🇸 США', '🇪🇺 Европа', '🇨🇳 Китай', '🇷🇺 Россия', '🌍 Мир', '🤖 AI / технологии'}
@@ -39,6 +40,35 @@ IMPACT_RANK = {'LOW': 1, 'MEDIUM': 2, 'HIGH': 3}
 ALMATY_TZ = ZoneInfo('Asia/Almaty')
 COMPLIMENTS = ['Зарина, у тебя редкое сочетание любопытства и умения доводить идеи до результата.', 'Зарина, ты умеешь замечать детали, которые другие легко пропускают.', 'Зарина, твоя настойчивость — тихая суперсила: если тебе что-то действительно нужно, ты докопаешься до работающего решения.', 'Зарина, у тебя есть талант превращать сырую идею в вещь, которой реально хочется пользоваться.', 'Зарина, у тебя отлично получается не соглашаться на «и так сойдёт» — и именно поэтому результат становится лучше.', 'Зарина, ты умеешь сочетать здравый смысл с фантазией — редкая и очень полезная смесь.', 'Зарина, у тебя хороший внутренний радар на то, что можно сделать удобнее, понятнее и интереснее.', 'Зарина, твоя требовательность к качеству — это уважение к собственному времени.', 'Зарина, у тебя есть вкус к хорошим идеям — и ещё более ценный навык быстро отсеивать плохие.', 'Зарина, ты умеешь задать именно тот вопрос, после которого всё начинает складываться.', 'Зарина, ты умеешь быстро переходить от «а что если?» к «так, давай сделаем».', 'Зарина, у тебя классный баланс между «хочу красиво» и «должно нормально работать».', 'Зарина, сегодня тебе полагается официальный комплимент: ты заметно интереснее среднестатистического понедельника 😄']
 BAD_IMAGE_WORDS = ('logo', 'favicon', 'icon', 'avatar', 'sprite', 'badge', 'advert', '/ads/', 'placeholder', 'default-image', '1x1')
+
+
+KZ_NATIONAL_PRIORITY_PATTERNS = (
+    'national day of mourning', 'day of national mourning', 'day of mourning',
+    'national mourning', 'общенационального траура', 'общенациональный траур',
+    'день траура', 'траур в казахстане', 'state of emergency',
+    'nationwide emergency', 'чрезвычайное положение', 'режим чс',
+    'emergency declared', 'mass casualty', 'многочисленные жертвы',
+    'крупная катастрофа', 'крупная авария', 'землетрясение', 'earthquake',
+    'flood emergency', 'масштабное наводнение'
+)
+
+KZ_IMPORTANT_PATTERNS = (
+    'presidential decree', 'decree of the president', 'указ президента',
+    'government commission', 'правительственная комиссия',
+    'ministry of defense', 'министерство обороны', 'interior ministry',
+    'мвд', 'гибель военнослужащих', 'servicemen killed', 'servicemen died'
+)
+
+
+def article_priority(article):
+    if article.get('source_region') != '🇰🇿 Казахстан':
+        return 0
+    text = (article.get('title', '') + ' ' + article.get('description', '')).lower()
+    if any(pattern in text for pattern in KZ_NATIONAL_PRIORITY_PATTERNS):
+        return 3
+    if any(pattern in text for pattern in KZ_IMPORTANT_PATTERNS):
+        return 2
+    return 0
 
 class HealthHandler(BaseHTTPRequestHandler):
 
@@ -166,7 +196,8 @@ def fetch_feed_articles(feed_info):
         feed = feedparser.parse(response.content)
         now_ts = time.time()
         max_age = FRESH_HOURS * 3600
-        for entry in feed.entries[:ARTICLES_PER_FEED]:
+        entry_limit = KZ_ARTICLES_PER_FEED if feed_info.get('region') == '🇰🇿 Казахстан' else ARTICLES_PER_FEED
+        for entry in feed.entries[:entry_limit]:
             title = clean_text(entry.get('title', ''))
             if not title:
                 continue
@@ -178,7 +209,8 @@ def fetch_feed_articles(feed_info):
                 continue
             description = clean_text(entry.get('summary', entry.get('description', '')))
             link = entry.get('link', '')
-            result.append({'source_region': feed_info['region'], 'source': feed_info['source'], 'publisher': feed_info.get('publisher', feed_info['source']), 'title': title, 'description': description, 'link': link, 'published_ts': published_ts, 'image_url': image_from_feed_entry(entry, link), 'protected': protected_terms(title + ' ' + description)})
+            priority = article_priority({'source_region': feed_info['region'], 'title': title, 'description': description})
+            result.append({'source_region': feed_info['region'], 'source': feed_info['source'], 'publisher': feed_info.get('publisher', feed_info['source']), 'title': title, 'description': description, 'link': link, 'published_ts': published_ts, 'image_url': image_from_feed_entry(entry, link), 'protected': protected_terms(title + ' ' + description), 'priority': priority})
     except Exception as error:
         print(f"RSS error {feed_info['source']}:", repr(error))
     return result
@@ -211,9 +243,27 @@ def select_articles_for_ai(articles):
     for article in articles:
         by_publisher[article.get('publisher', article.get('source'))].append(article)
     for items in by_publisher.values():
-        items.sort(key=lambda x: x.get('published_ts', 0), reverse=True)
+        items.sort(key=lambda x: (x.get('priority', 0), x.get('published_ts', 0)), reverse=True)
+
     selected = []
     used = set()
+
+    # Сначала гарантированно берём события национального масштаба.
+    priority_articles = sorted(
+        [a for a in articles if a.get('priority', 0) > 0],
+        key=lambda x: (x.get('priority', 0), x.get('published_ts', 0)),
+        reverse=True
+    )
+    for article in priority_articles:
+        key = article.get('link') or id(article)
+        if key in used:
+            continue
+        selected.append(article)
+        used.add(key)
+        if len(selected) >= MAX_AI_ARTICLES:
+            return selected
+
+    # Затем обеспечиваем разнообразие редакций.
     for round_index in range(3):
         for publisher in sorted(by_publisher):
             items = by_publisher[publisher]
@@ -226,9 +276,15 @@ def select_articles_for_ai(articles):
             selected.append(article)
             used.add(key)
             if len(selected) >= MAX_AI_ARTICLES:
-                selected.sort(key=lambda x: x.get('published_ts', 0), reverse=True)
                 return selected
-    for article in articles:
+
+    # Остаток заполняем лучшими по приоритету и свежести.
+    remainder = sorted(
+        articles,
+        key=lambda x: (x.get('priority', 0), x.get('published_ts', 0)),
+        reverse=True
+    )
+    for article in remainder:
         key = article.get('link') or id(article)
         if key in used:
             continue
@@ -236,7 +292,6 @@ def select_articles_for_ai(articles):
         used.add(key)
         if len(selected) >= MAX_AI_ARTICLES:
             break
-    selected.sort(key=lambda x: x.get('published_ts', 0), reverse=True)
     return selected
 
 def call_groq(prompt):
@@ -416,9 +471,10 @@ def group_articles(articles, processed):
             continue
         event_id = data.get('event_id', f'UNIQUE_{index}')
         if event_id not in events:
-            events[event_id] = {'region': data.get('display_region', article['source_region']), 'title': title_ru, 'summary': data.get('summary_ru', ''), 'impact': data.get('impact', 'MEDIUM'), 'published_ts': article.get('published_ts', 0), 'image_url': article.get('image_url'), 'sources': []}
+            events[event_id] = {'region': data.get('display_region', article['source_region']), 'title': title_ru, 'summary': data.get('summary_ru', ''), 'impact': data.get('impact', 'MEDIUM'), 'published_ts': article.get('published_ts', 0), 'image_url': article.get('image_url'), 'priority': article.get('priority', 0), 'sources': []}
         else:
             events[event_id]['published_ts'] = max(events[event_id].get('published_ts', 0), article.get('published_ts', 0))
+            events[event_id]['priority'] = max(events[event_id].get('priority', 0), article.get('priority', 0))
             old_impact = events[event_id].get('impact', 'MEDIUM')
             new_impact = data.get('impact', 'MEDIUM')
             if IMPACT_RANK.get(new_impact, 0) > IMPACT_RANK.get(old_impact, 0):
@@ -452,7 +508,7 @@ def unique_publishers(sources):
 
 def event_quality_key(event):
     publishers_count = len(unique_publishers(event.get('sources', [])))
-    return (IMPACT_RANK.get(event.get('impact', 'MEDIUM'), 0), min(publishers_count, 5), event.get('published_ts', 0))
+    return (event.get('priority', 0), IMPACT_RANK.get(event.get('impact', 'MEDIUM'), 0), min(publishers_count, 5), event.get('published_ts', 0))
 
 def rank_events(events):
     return sorted(events, key=event_quality_key, reverse=True)
@@ -680,6 +736,8 @@ async def run_news_request(update, context, region_filter=None, sport_filter=Non
         status_text = f'🔎 Собираю {sport_filter} за последние {FRESH_HOURS} часов...'
     elif region_filter == '🏆 Спорт':
         status_text = '🏆 Собираю спорт...\n🧠 Выбираю значимые события, а не первые строки RSS'
+    elif region_filter == '🇰🇿 Казахстан':
+        status_text = '🇰🇿 Собираю Казахстан за последние 24 часа...\n🧠 Отдельно проверяю события национального масштаба'
     elif region_filter:
         status_text = f'🔎 Собираю свежие новости: {region_filter}'
     else:
