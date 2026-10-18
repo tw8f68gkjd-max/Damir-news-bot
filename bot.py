@@ -5,6 +5,7 @@ import time
 import uuid
 import threading
 import calendar
+import sqlite3
 import xml.etree.ElementTree as ET
 from collections import OrderedDict, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -69,6 +70,347 @@ def article_priority(article):
     if any(pattern in text for pattern in KZ_IMPORTANT_PATTERNS):
         return 2
     return 0
+
+# =========================================================
+# СТАТИСТИКА ПОЛЬЗОВАТЕЛЕЙ
+# =========================================================
+# Deplexo даёт постоянный диск /data. SQLite здесь переживает
+# обычные перезапуски и redeploy приложения.
+STATS_DB_PATH = os.environ.get('STATS_DB_PATH', '/data/bot_stats.db')
+
+
+def init_stats_db():
+    try:
+        db_dir = os.path.dirname(STATS_DB_PATH)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+
+        with sqlite3.connect(STATS_DB_PATH, timeout=10) as conn:
+            conn.execute('PRAGMA journal_mode=WAL')
+            conn.execute('PRAGMA busy_timeout=10000')
+            conn.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id INTEGER PRIMARY KEY,
+                    username TEXT,
+                    first_name TEXT,
+                    last_name TEXT,
+                    first_seen INTEGER NOT NULL,
+                    last_seen INTEGER NOT NULL,
+                    request_count INTEGER NOT NULL DEFAULT 0
+                )
+                '''
+            )
+            conn.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS actions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    action TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                )
+                '''
+            )
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_users_last_seen ON users(last_seen)')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_actions_created_at ON actions(created_at)')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_actions_action ON actions(action)')
+            conn.commit()
+
+        print('Stats DB ready:', STATS_DB_PATH)
+        return True
+
+    except Exception as error:
+        print('Stats DB init error:', repr(error))
+        return False
+
+
+def get_admin_telegram_id():
+    raw = os.environ.get('ADMIN_TELEGRAM_ID', '').strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def action_from_message(update):
+    message = update.effective_message
+    if not message:
+        return 'message'
+
+    text = (message.text or '').strip()
+    if not text:
+        return 'message'
+
+    if text.startswith('/'):
+        command = text.split()[0].split('@')[0].lower()
+        return 'cmd:' + command
+
+    tracked_buttons = {
+        '🔥 Главное', '⚡ Кратко', '📰 Все новости', '🏆 Спорт',
+        '💰 Финансы', '🇰🇿 Казахстан', '🇺🇸 США', '🇪🇺 Европа',
+        '🇨🇳 Китай', '🇷🇺 Россия', '🌍 Мир', '🤖 AI / технологии',
+        '🏆 Весь спорт', '⚽ Футбол', '🏎 F1', '🏀 Баскетбол',
+        '🎾 Теннис', '⬅️ Главное меню'
+    }
+
+    if text in tracked_buttons:
+        return 'button:' + text
+
+    return 'message'
+
+
+def record_activity(update, action):
+    user = update.effective_user
+    if not user:
+        return
+
+    now_ts = int(time.time())
+
+    try:
+        with sqlite3.connect(STATS_DB_PATH, timeout=10) as conn:
+            conn.execute('PRAGMA busy_timeout=10000')
+            conn.execute(
+                '''
+                INSERT INTO users (
+                    user_id, username, first_name, last_name,
+                    first_seen, last_seen, request_count
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 1)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    username = excluded.username,
+                    first_name = excluded.first_name,
+                    last_name = excluded.last_name,
+                    last_seen = excluded.last_seen,
+                    request_count = users.request_count + 1
+                ''',
+                (
+                    user.id,
+                    user.username,
+                    user.first_name,
+                    user.last_name,
+                    now_ts,
+                    now_ts,
+                )
+            )
+            conn.execute(
+                'INSERT INTO actions (user_id, action, created_at) VALUES (?, ?, ?)',
+                (user.id, action, now_ts)
+            )
+            conn.commit()
+
+    except Exception as error:
+        # Статистика не должна ломать основной бот.
+        print('Stats write error:', repr(error))
+
+
+async def analytics_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    record_activity(update, action_from_message(update))
+
+
+async def analytics_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query:
+        return
+
+    raw = query.data or ''
+    prefix = raw.split(':', 1)[0]
+    labels = {
+        'd': 'callback:Подробнее',
+        'w': 'callback:Почему важно',
+        's': 'callback:Источники',
+    }
+    record_activity(update, labels.get(prefix, 'callback:' + prefix))
+
+
+def almaty_day_start_ts():
+    now = datetime.now(ALMATY_TZ)
+    start = datetime(
+        now.year,
+        now.month,
+        now.day,
+        tzinfo=ALMATY_TZ
+    )
+    return int(start.timestamp())
+
+
+def format_stats_time(timestamp):
+    if not timestamp:
+        return '—'
+    return datetime.fromtimestamp(
+        timestamp,
+        ALMATY_TZ
+    ).strftime('%d.%m %H:%M')
+
+
+def clean_action_label(action):
+    if action.startswith('button:'):
+        return action[len('button:'):]
+
+    command_labels = {
+        'cmd:/news': '📰 Все новости',
+        'cmd:/brief': '⚡ Кратко',
+        'cmd:/important': '🔥 Главное',
+        'cmd:/markets': '💰 Финансы',
+        'cmd:/sport': '🏆 Спорт',
+        'cmd:/football': '⚽ Футбол',
+        'cmd:/f1': '🏎 F1',
+        'cmd:/basketball': '🏀 Баскетбол',
+        'cmd:/tennis': '🎾 Теннис',
+        'cmd:/kz': '🇰🇿 Казахстан',
+        'cmd:/usa': '🇺🇸 США',
+        'cmd:/europe': '🇪🇺 Европа',
+        'cmd:/china': '🇨🇳 Китай',
+        'cmd:/russia': '🇷🇺 Россия',
+        'cmd:/world': '🌍 Мир',
+        'cmd:/ai': '🤖 AI / технологии',
+    }
+
+    return command_labels.get(action, action)
+
+
+def get_stats_snapshot():
+    now_ts = int(time.time())
+    today_start = almaty_day_start_ts()
+    week_start = now_ts - 7 * 24 * 3600
+
+    with sqlite3.connect(STATS_DB_PATH, timeout=10) as conn:
+        conn.execute('PRAGMA busy_timeout=10000')
+
+        total_users = conn.execute(
+            'SELECT COUNT(*) FROM users'
+        ).fetchone()[0]
+
+        new_today = conn.execute(
+            'SELECT COUNT(*) FROM users WHERE first_seen >= ?',
+            (today_start,)
+        ).fetchone()[0]
+
+        active_24h = conn.execute(
+            'SELECT COUNT(*) FROM users WHERE last_seen >= ?',
+            (now_ts - 24 * 3600,)
+        ).fetchone()[0]
+
+        requests_today = conn.execute(
+            'SELECT COUNT(*) FROM actions WHERE created_at >= ?',
+            (today_start,)
+        ).fetchone()[0]
+
+        popular_rows = conn.execute(
+            '''
+            SELECT action, COUNT(*) AS cnt
+            FROM actions
+            WHERE created_at >= ?
+              AND action NOT IN (
+                  'message', 'cmd:/start', 'cmd:/menu', 'cmd:/status',
+                  'cmd:/stats', 'cmd:/myid', 'cmd:/zarina', 'cmd:/manutd'
+              )
+              AND action NOT LIKE 'callback:%'
+            GROUP BY action
+            ORDER BY cnt DESC
+            LIMIT 6
+            ''',
+            (week_start,)
+        ).fetchall()
+
+        recent_users = conn.execute(
+            '''
+            SELECT user_id, username, first_name, last_name, last_seen, request_count
+            FROM users
+            ORDER BY last_seen DESC
+            LIMIT 10
+            '''
+        ).fetchall()
+
+    return {
+        'total_users': total_users,
+        'new_today': new_today,
+        'active_24h': active_24h,
+        'requests_today': requests_today,
+        'popular_rows': popular_rows,
+        'recent_users': recent_users,
+    }
+
+
+async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user:
+        return
+
+    await update.effective_message.reply_text(
+        f'🪪 Твой Telegram ID: {user.id}'
+    )
+
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user:
+        return
+
+    admin_id = get_admin_telegram_id()
+
+    if admin_id is None:
+        await update.effective_message.reply_text(
+            '⚙️ Статистика уже подключена, но ADMIN_TELEGRAM_ID ещё не задан.\n\n'
+            f'Твой Telegram ID: {user.id}\n\n'
+            'Добавь в Deplexo → Environment:\n'
+            f'ADMIN_TELEGRAM_ID={user.id}\n\n'
+            'Затем сделай Redeploy.'
+        )
+        return
+
+    if user.id != admin_id:
+        await update.effective_message.reply_text('⛔ Доступ закрыт.')
+        return
+
+    try:
+        snapshot = get_stats_snapshot()
+    except Exception as error:
+        print('Stats read error:', repr(error))
+        await update.effective_message.reply_text(
+            '⚠️ Не удалось прочитать статистику.'
+        )
+        return
+
+    lines = [
+        '📊 Статистика бота',
+        '',
+        f"👥 Всего пользователей: {snapshot['total_users']}",
+        f"🆕 Новых сегодня: {snapshot['new_today']}",
+        f"🟢 Активных за 24 часа: {snapshot['active_24h']}",
+        f"📨 Действий сегодня: {snapshot['requests_today']}",
+    ]
+
+    if snapshot['popular_rows']:
+        lines += ['', '🔥 Популярное за 7 дней:']
+        for action, count in snapshot['popular_rows']:
+            lines.append(f'• {clean_action_label(action)} — {count}')
+
+    if snapshot['recent_users']:
+        lines += ['', '👤 Последние пользователи:']
+
+        for user_id, username, first_name, last_name, last_seen, request_count in snapshot['recent_users']:
+            full_name = ' '.join(
+                part for part in (first_name, last_name) if part
+            ).strip()
+
+            if username:
+                label = '@' + username
+                if full_name:
+                    label += f' ({full_name})'
+            else:
+                label = full_name or 'Без имени'
+
+            lines.append(
+                f'• {label}\n'
+                f'  ID {user_id} · {format_stats_time(last_seen)} · {request_count} действий'
+            )
+
+    await update.effective_message.reply_text(
+        '\n'.join(lines)
+    )
+
 
 class HealthHandler(BaseHTTPRequestHandler):
 
@@ -887,15 +1229,21 @@ async def post_init(application: Application):
     await application.bot.set_my_commands([BotCommand('news', 'Все новости'), BotCommand('brief', '5 новостей коротко'), BotCommand('important', 'Главные события'), BotCommand('markets', 'Финансы'), BotCommand('sport', 'Весь спорт'), BotCommand('football', 'Футбол'), BotCommand('f1', 'Formula 1'), BotCommand('basketball', 'Баскетбол'), BotCommand('tennis', 'Теннис'), BotCommand('kz', 'Казахстан'), BotCommand('usa', 'США'), BotCommand('europe', 'Европа'), BotCommand('china', 'Китай'), BotCommand('russia', 'Россия'), BotCommand('world', 'Мир'), BotCommand('ai', 'AI и технологии'), BotCommand('menu', 'Показать меню'), BotCommand('status', 'Проверить AI')])
 
 def main():
+    init_stats_db()
     threading.Thread(target=run_web_server, daemon=True).start()
     app = Application.builder().token(os.environ['TELEGRAM_BOT_TOKEN']).post_init(post_init).build()
-    handlers = [('start', start), ('menu', menu), ('news', news), ('brief', brief), ('important', important), ('markets', markets), ('sport', all_sport), ('status', status), ('manutd', manutd), ('zarina', zarina)]
+    handlers = [('start', start), ('menu', menu), ('news', news), ('brief', brief), ('important', important), ('markets', markets), ('sport', all_sport), ('status', status), ('manutd', manutd), ('zarina', zarina), ('stats', stats), ('myid', myid)]
     for command, function in handlers:
         app.add_handler(CommandHandler(command, function))
     for command in COMMAND_TO_REGION:
         app.add_handler(CommandHandler(command, region_command))
     for command in SPORT_COMMANDS:
         app.add_handler(CommandHandler(command, sport_command))
+
+    # Аналитика идёт в отдельной группе и не мешает обычным обработчикам.
+    app.add_handler(MessageHandler(filters.ALL, analytics_message, block=False), group=-1)
+    app.add_handler(CallbackQueryHandler(analytics_callback, block=False), group=-1)
+
     app.add_handler(CallbackQueryHandler(news_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_buttons))
     print('Telegram bot started')
